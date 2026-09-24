@@ -8,7 +8,9 @@
 
 import 'dart:math' as math;
 
-class MapFrame {
+import 'map_model.dart' show MapFrameLike;
+
+class MapFrame implements MapFrameLike {
   final int grid;
   final double centerLat;
   final double centerLon;
@@ -21,6 +23,9 @@ class MapFrame {
     required this.spanM,
     this.name = '',
   });
+
+  @override
+  int get sectionCount => grid * grid;
 
   /// The frame the user is LOOKING at now (the chosen size, same
   /// center) - section 3: changing the size changes the DRAWING only.
@@ -57,6 +62,7 @@ class MapFrame {
   /// can be section 1 on the 20 km view and outside the 20 km window
   /// entirely; the section grid is a property of the VIEW, never of
   /// the node.
+  @override
   int sectionOf(double lat, double lon) {
     final (x, y) = projectXY(lat, lon);
     if (x < -0.5 || x > 0.5 || y < -0.5 || y > 0.5) return 0;

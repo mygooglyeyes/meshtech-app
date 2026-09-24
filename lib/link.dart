@@ -82,7 +82,7 @@ class TcpLink implements Link {
   void _log(String line) => events.onLog?.call(line);
 
   /// The door URL - the web app's exact shape (App.ts onConnect):
-  /// ws://<host>:<port>/feed, bare host = the node's web port 8710.
+  /// `ws://host:port/feed`, bare host = the node's web port 8710.
   static String doorUrl(String host) {
     final parts = host.split(':');
     final port = parts.length > 1 ? parts[1] : '8710';

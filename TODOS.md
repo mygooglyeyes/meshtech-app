@@ -1,5 +1,53 @@
 # meshtech-app - TODOS (order matters, top first)
 
+## BUILT, UNCOMMITTED (2026-09-24): MAP SCREEN (step 3) - analyzer
+## clean, 34 tests green, DEBUG APK BUILDS
+lib/map_model.dart: the map's view-model - one dot per positioned
+node (no fix = no dot), stale = the 14-day line (fresh #4A90D9 /
+stale #F5C518), section counts counted ON THE VIEW, labels = name
++ pubkey head (section 8).
+lib/map_screen.dart: MapLibre 0.3.6 declarative layers, CARTO
+Voyager daylight style, fresh + stale circle layers, text-label
+markers, "N node(s) with positions - M stale" strip.
+lib/app_shell.dart: shell lifted out of main.dart, injectable
+socket factory (package:web stays quarantined in
+web_door_socket.dart); lib/main.dart = Android entry,
+lib/main_web.dart = web entry.
+tests: map_model laws + shell smoke rewrite. Suite 34 all green.
+BUILD FACTS: NDK 28.2.13676358 installed (android.exe sdk
+install); gradle auto-added platform 35 + CMake 3.22.1; maplibre
+0.3.6 applies ktlint UNVERSIONED (upstream bug #565, fix ships in
+0.3.7 - not on pub.dev yet) -> pinned ktlint 14.2.0 in
+android/settings.gradle.kts, drop the pin when 0.3.7 lands.
+flutter build apk --debug = BUILT
+(build\app\outputs\flutter-apk\app-debug.apk).
+NEXT when Brett says go: commit step 3, then routes/sections/health
+or a first TCP connect at the bench.
+
+## DONE - STEP 2 (2026-09-24, committed 5b7d483 + pushed): CONNECT
+## SCREEN + LINK LAYER - flutter test 29 ALL GREEN
+lib/settings.dart: persisted settings (address, password, MAP SIZE
+chosen before connect, client origin minted once, sync marker).
+lib/store.dart: the phone's own store - upsert REPLACES (one node =
+one dot, moved node never twins), unknown-never-overwrites-known on
+INTRO merge, GONE removal, honest lastHeardMs ages, name + pubkey-
+head labels (section 8), persisted across restarts.
+lib/grid.dart: the re-cut - data heard at any span projects onto the
+chosen size (zoom = same real place, bigger fraction); sections are
+a property of the VIEW (a node can be section 2 at 60 km and outside
+the window at 20 km).
+lib/link.dart + lib/door_socket.dart + lib/web_door_socket.dart:
+TcpLink speaks the web app's EXACT door protocol (ws://host:8710/feed,
+bearer.<password> subprotocol, wire-hex packets through the SAME
+codec, resume-after-hello, seq-regression reset, plain-words refusal
+acks, NO auto-reconnect, silent-drop watchdog with injectable tick);
+CompanionLink = the inert honest slot ("no radio paired" until the
+hardware go).
+lib/connect_screen.dart: address + password + size picked BEFORE
+connect, saved first, state-driven button, log view.
+tests: 15 new (store laws, re-cut math incl. the 3x-zoom truth, door
+protocol through a fake socket incl. watchdog). Suite 29 green.
+
 ## WORKFLOW (Brett, 2026-09-24): ALL FUTURE DEV WORK ON THE dev BRANCH
 The app repo now works on `dev` (Brett created it on GitHub; local
 checked out, tracking origin/dev). main = the stable line; work

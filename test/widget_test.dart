@@ -1,30 +1,22 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
+// App-shell smoke test: the connect screen is the landing state, with
+// the three saved facts present (address, password, map size BEFORE
+// connect - design section 3).
 
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-import 'package:meshtech_app/main.dart';
+import 'package:meshtech_app/app_shell.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
-
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
-
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
-
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+  testWidgets('app lands on the connect screen with the three facts',
+      (tester) async {
+    // The settings store rides SharedPreferences; the test binding
+    // needs its in-memory mock channel before any load() runs.
+    SharedPreferences.setMockInitialValues({});
+    await tester.pumpWidget(const MeshtechApp());
+    await tester.pumpAndSettle();
+    expect(find.text('Connect'), findsWidgets);
+    expect(find.text('Hilltop address'), findsOneWidget);
+    expect(find.text('Data-door password'), findsOneWidget);
+    expect(find.textContaining('Map size'), findsOneWidget);
   });
 }
