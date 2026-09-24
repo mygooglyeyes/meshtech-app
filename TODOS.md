@@ -1,5 +1,10 @@
 # meshtech-app - TODOS (order matters, top first)
 
+## WORKFLOW (Brett, 2026-09-24): ALL FUTURE DEV WORK ON THE dev BRANCH
+The app repo now works on `dev` (Brett created it on GitHub; local
+checked out, tracking origin/dev). main = the stable line; work
+lands on dev, merges up to main only with Brett's explicit OK.
+
 ## QUEUED (Brett, 2026-09-24, "one todo later"): STALE NODES PACKET
 A packet telling the phone which nodes the SERVER has not heard from
 in 14 days (the server's stale line) -> the phone turns those dots
