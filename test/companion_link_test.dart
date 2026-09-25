@@ -62,7 +62,13 @@ class FakeBleTransport implements BleTransport {
   @override
   Future<void> write(Uint8List data) async {
     writes.add(Uint8List.fromList(data));
+    onWrite?.call(Uint8List.fromList(data));
   }
+
+  /// v019 race rigging: fires WHILE a write is in flight - the real
+  /// radio's OK can land before our BLE write future settles (the
+  /// 2026-09-25 16:19 bench race).
+  void Function(Uint8List data)? onWrite;
 
   @override
   Future<void> close() async {
@@ -319,6 +325,29 @@ void main() {
     await Future<void>.delayed(Duration.zero);
     expect(
         logs.any((l) => l.contains('uplink ACCEPTED by radio')), isTrue);
+
+    link.disconnect();
+  });
+
+  test('an OK that lands DURING the write still counts (v019 race)',
+      () async {
+    final fake = FakeBleTransport();
+    final logs = <String>[];
+    final link = buildLink(LinkEvents(onLog: logs.add), fake);
+    await link.connect();
+    fake.emit(channelInfo(2, 'scope', scopeSecret()));
+    await Future<void>.delayed(Duration.zero);
+
+    // The bench race (2026-09-25 16:19): hilltop heard the packet
+    // 278 ms before our BLE write future returned, and the OK that
+    // arrived inside that gap was dropped with the flag still down -
+    // six seconds later the app printed "verdict MISSING" for a send
+    // that had worked. The flag must be armed BEFORE the write.
+    fake.onWrite = (_) => fake.emit([0x00]);
+    await link.sendVectoredAsk(syncMarker: 0, spanKm: 40, origin: 1);
+    await Future<void>.delayed(Duration.zero);
+    expect(logs.any((l) => l.contains('uplink ACCEPTED by radio')), isTrue);
+    expect(logs.any((l) => l.contains('verdict MISSING')), isFalse);
 
     link.disconnect();
   });

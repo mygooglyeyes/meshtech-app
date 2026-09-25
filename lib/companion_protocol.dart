@@ -381,14 +381,23 @@ class CompanionProtocol {
 
   Future<bool> _writeRaw(Uint8List frame, String receipt,
       {bool verdict = false}) async {
+    // v019 (the 2026-09-25 16:19 bench race): arm the verdict flag
+    // BEFORE the write - the radio's OK can land while the BLE write
+    // future is still settling (hilltop heard the packet 278 ms
+    // before our own write returned), and an OK arriving with the
+    // flag down was discarded as unsolicited - printing "verdict
+    // MISSING" for a send that had worked perfectly.
+    if (verdict) {
+      _awaitingTxAckMs = DateTime.now().millisecondsSinceEpoch;
+    }
     try {
       await transport.write(frame);
-      if (verdict) {
-        _awaitingTxAckMs = DateTime.now().millisecondsSinceEpoch;
-      }
       onLog(receipt);
       return true;
     } catch (err) {
+      if (verdict) {
+        _awaitingTxAckMs = 0;
+      }
       onLog('TX failed: $err');
       return false;
     }
