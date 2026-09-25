@@ -14,7 +14,7 @@ import 'dart:async';
 
 // 'Route' hidden: the WIRE's Route (codec.dart) is the one this file
 // means - Flutter's Navigator Route is never used here.
-import 'package:flutter/foundation.dart' show kDebugMode;
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter/material.dart' hide Route;
 
 import 'codec.dart';
@@ -62,8 +62,11 @@ class _MeshtechAppState extends State<MeshtechApp> {
   bool _mounted = true; // link callbacks can outlive the widget tree
 
   /// The log lives in state; packets arriving from link callbacks
-  /// append here (the map's log box reads it).
+  /// append here (the map's log box reads it). THE DEVICE LOG
+  /// (Brett, 2026-09-25 - "device"): every line also goes to the
+  /// Android log so adb can read the phone's truth off-screen.
   void _logLine(String line) {
+    debugPrint(line);
     _log.insert(0, line);
     if (_log.length > 50) _log.removeLast();
     _safeSetState(() {});
@@ -79,10 +82,7 @@ class _MeshtechAppState extends State<MeshtechApp> {
         _linkDetail = d;
       }),
       onPacket: (packet, {heardMs}) => _onPacket(packet, heardMs),
-      onLog: (line) => _safeSetState(() {
-        _log.insert(0, line);
-        if (_log.length > 50) _log.removeLast();
-      }),
+      onLog: _logLine,
       onReset: () => _store.resetAll(),
     );
     _tcpLink = _buildLink();
@@ -151,6 +151,8 @@ class _MeshtechAppState extends State<MeshtechApp> {
         for (final e in i.entries) {
           _store.applyIntroEntry(e, heardMs: now);
         }
+        debugPrint('INTRO ${i.entries.length} entr(ies) -> '
+            '${_store.nodes.length} node(s) in store');
       case final Gone g:
         for (final p in g.prefixes) {
           _store.removeGone(p);
@@ -200,6 +202,7 @@ class _MeshtechAppState extends State<MeshtechApp> {
   /// the screen (it shows the lookup's honest error if it failed).
   Future<void> _connect(String host, String password, int mapSizeKm,
       String homeZip, (double, double)? homeCenter) async {
+    debugPrint('SHELL CONNECT host="$host"');
     final next = _settings.copyWith(
       host: host,
       password: password,
@@ -209,6 +212,7 @@ class _MeshtechAppState extends State<MeshtechApp> {
       homeLon: homeCenter?.$2 ?? _settings.homeLon,
     );
     await SettingsStore().save(next);
+    debugPrint('SETTINGS SAVED');
     if (!mounted) return;
     setState(() {
       _settings = next;

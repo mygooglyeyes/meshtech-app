@@ -121,6 +121,7 @@ class TcpLink implements Link {
     }
     _wantRun = true;
     _setState(LinkState.connecting);
+    _log('dialing ${doorUrl(host)}');
     try {
       // The factory INSIDE the try: a missing/unwired socket must
       // refuse in plain words, never hang the button on Connecting

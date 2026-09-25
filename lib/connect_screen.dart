@@ -42,6 +42,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
   late int _mapSizeKm;
   bool _zipBusy = false;
   String? _zipError;
+  String? _error; // the plain-words verdict of a Connect press
 
   @override
   void initState() {
@@ -50,6 +51,28 @@ class _ConnectScreenState extends State<ConnectScreen> {
     _password = TextEditingController(text: widget.settings.password);
     _zip = TextEditingController(text: widget.settings.homeZip);
     _mapSizeKm = widget.settings.mapSizeKm;
+  }
+
+  /// THE FIELDS FILL WHEN THE SETTINGS ARRIVE (Brett 2026-09-25,
+  /// Bug A): the first frame builds these controllers BEFORE the
+  /// async load finishes, so they used to start EMPTY even with a
+  /// saved address - and Connect then refused silently. When the
+  /// settings land (new widget), any field the human hasn't touched
+  /// (still empty) takes its saved value. Never overwrites typing.
+  @override
+  void didUpdateWidget(covariant ConnectScreen old) {
+    super.didUpdateWidget(old);
+    if (identical(old.settings, widget.settings)) return;
+    if (_host.text.isEmpty && widget.settings.host.isNotEmpty) {
+      _host.text = widget.settings.host;
+    }
+    if (_password.text.isEmpty && widget.settings.password.isNotEmpty) {
+      _password.text = widget.settings.password;
+    }
+    if (_zip.text.isEmpty && widget.settings.homeZip.isNotEmpty) {
+      _zip.text = widget.settings.homeZip;
+    }
+    if (_error != null && _host.text.isNotEmpty) _error = null;
   }
 
   @override
@@ -61,7 +84,20 @@ class _ConnectScreenState extends State<ConnectScreen> {
   }
 
   Future<void> _onConnect() async {
+    // THE DEVICE LOG (Brett 2026-09-25): where a Connect press dies,
+    // visible in adb.
+    debugPrint('CONNECT TAP host="${_host.text}"'
+        ' pwd(${_password.text.length}) zip="${_zip.text}"');
     final host = _host.text.trim();
+    // NO SILENT REFUSAL (Brett, 2026-09-25): an empty address says
+    // so on screen and in the device log - the button never again
+    // appears dead.
+    if (host.isEmpty) {
+      setState(() => _error = 'no address yet - type the hilltop address');
+      debugPrint('CONNECT REFUSED: empty address');
+      return;
+    }
+    if (_error != null) setState(() => _error = null);
     if (host.isEmpty) return; // the log line says what's missing
     // THE HOME AREA (section 9): a 5-digit ZIP gets looked up ONLINE
     // (first run has internet), its center saved as hard data. An
@@ -108,6 +144,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
           const SizedBox(height: 12),
           TextField(
             controller: _host,
+            onTap: () => debugPrint('FIELD-AT host'),
             decoration: const InputDecoration(
               labelText: 'Hilltop address',
               hintText: '192.168.12.145 (or host:port)',
@@ -118,6 +155,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
           const SizedBox(height: 12),
           TextField(
             controller: _password,
+            onTap: () => debugPrint('FIELD-AT password'),
             obscureText: true,
             decoration: const InputDecoration(
               labelText: 'Data-door password',
@@ -130,6 +168,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
           // data - the map's center comes from here.
           TextField(
             controller: _zip,
+            onTap: () => debugPrint('FIELD-AT zip'),
             keyboardType: TextInputType.number,
             decoration: InputDecoration(
               labelText: 'Home ZIP code',
@@ -173,7 +212,13 @@ class _ConnectScreenState extends State<ConnectScreen> {
               LinkState.disabled => _zipBusy ? 'Looking up ZIP...' : 'Connect',
             }),
           ),
-          if (widget.linkDetail.isNotEmpty)
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(_error!,
+                  style: Theme.of(context).textTheme.bodySmall),
+            )
+          else if (widget.linkDetail.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: Text(widget.linkDetail,
