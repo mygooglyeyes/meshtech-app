@@ -1,0 +1,46 @@
+# VERSION RULE (Brett, 2026-09-24 for meshtech-node, 2026-09-25
+# extended to this repo): every push must RAISE the version in
+# pubspec.yaml. This checker fails the push loudly when the number
+# did not rise - the box's (and phone's) version chip is how Brett
+# tells the truth from a label, so code can never again ship under
+# an old one. Format is Brett's 00.000.000 (zero-padded, so the
+# comparison below is also the real order).
+name: check-version-rise
+
+on:
+  push:
+    branches: [dev, main]
+
+jobs:
+  version-must-rise:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: compare pubspec version with the previous push
+        run: |
+          set -euo pipefail
+          ver_of() { grep -m1 '^version' "$1" | awk '{print $2}'; }
+          new_ver=$(ver_of pubspec.yaml)
+          before="${{ github.event.before }}"
+          if [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ]; then
+            echo "first push to the branch - version is $new_ver, rule armed."
+            exit 0
+          fi
+          old_ver=$(git show "$before:pubspec.yaml" 2>/dev/null | grep -m1 '^version' | awk '{print $2}' || true)
+          if [ -z "$old_ver" ]; then
+            echo "predecessor commit not readable - version is $new_ver."
+            exit 0
+          fi
+          echo "previous push: $old_ver   this push: $new_ver"
+          if [ "$new_ver" = "$old_ver" ]; then
+            echo "::error::VERSION RULE BROKEN: pubspec.yaml still says $new_ver. Every push must raise the version. Bump it in pubspec.yaml and push again."
+            exit 1
+          fi
+          if [[ ! "$new_ver" > "$old_ver" ]]; then
+            echo "::error::VERSION RULE BROKEN: the version went DOWN ($old_ver -> $new_ver)."
+            exit 1
+          fi
+          echo "version rose - OK."
