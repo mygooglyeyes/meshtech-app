@@ -9,9 +9,17 @@
 //   3. Feed health - the PULSE line.
 //   4. Logs - the event log, every line.
 // Each section's header bar folds/unfolds its own section (+/- icon).
+// THE PAGE SWIPES (Brett, 2026-09-25 - "swipe"): ONE tall stack he
+// pushes up with his own finger to reach Feed health/Logs, and
+// closing a section slides the page home by itself. The map/list
+// frame is measured ONCE (screen minus the bars around it - its old
+// full size) and then frozen for the app's life: nothing can ever
+// resize it, so the native lines and labels can never mis-seat.
 // The settings gear is honest until the settings step ships.
 
 import 'package:flutter/material.dart' hide Route;
+
+import 'dart:math' as math;
 
 import 'browser_screen.dart';
 import 'codec.dart';
@@ -68,68 +76,147 @@ class _MainPageState extends State<MainPage> {
   bool _healthOpen = true;
   bool _logsOpen = false; // space first; the bar is one tap away
 
+  // THE MAP'S ONE HEIGHT: measured after the first frame (the
+  // three bars are laid out once, their real heights read back),
+  // then never touched again - a resize after the map draws is
+  // exactly what mis-seats the lines and labels.
+  final _connKey = GlobalKey();
+  final _healthKey = GlobalKey();
+  final _logsKey = GlobalKey();
+  double? _mapH;
+  final _scroll = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _measureMap());
+  }
+
+  void _measureMap() {
+    if (_mapH != null || !mounted) return;
+    RenderBox? box(GlobalKey k) {
+      final ro = k.currentContext?.findRenderObject();
+      return (ro is RenderBox && ro.hasSize) ? ro : null;
+    }
+
+    final conn = box(_connKey);
+    final health = box(_healthKey);
+    final logs = box(_logsKey);
+    if (conn == null || health == null || logs == null) {
+      // Not laid out yet: try again after the next frame rather
+      // than guess a number.
+      WidgetsBinding.instance.addPostFrameCallback((_) => _measureMap());
+      return;
+    }
+    final mq = MediaQuery.of(context);
+    final usable = mq.size.height - mq.padding.top - mq.padding.bottom;
+    setState(() {
+      _mapH = math.max(
+          usable - conn.size.height - health.size.height - logs.size.height,
+          200.0);
+    });
+  }
+
+  /// One section bar tapped: fold/unfold it. CLOSING also slides
+  /// the whole page home (Brett: "return when you are done").
+  void _toggle(bool wasOpen, VoidCallback change) {
+    setState(change);
+    if (wasOpen && _scroll.hasClients && _scroll.offset > 0) {
+      _scroll.animateTo(0,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOutCubic);
+    }
+  }
+
   void _toggleView() => setState(() => _showMap = !_showMap);
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final p = widget.pulse;
+    // The map/list body is built ONLY once its height is measured:
+    // the map is never constructed at one size and re-laid at
+    // another (that mismatch is the distortion bug).
+    final body =
+        _mapH == null ? null : (_showMap ? _mapBody(context) : _listBody());
     final view = _Section(
       label: _showMap ? 'Map' : 'List',
       open: _viewOpen,
-      onToggle: () => setState(() => _viewOpen = !_viewOpen),
-      // The map/list FILL the slack height (the section bar sits over
-      // an Expanded frame) - a shrink-wrapped child would hand the
-      // list's TabBarView an unbounded height.
+      onToggle: () => _toggle(_viewOpen, () => _viewOpen = !_viewOpen),
+      // The map/list fill their FIXED frame (the section bar sits
+      // over it) - a shrink-wrapped child would hand the list's
+      // TabBarView an unbounded height.
       fill: true,
-      child: _showMap ? _mapBody(context) : _listBody(),
+      child: body,
     );
     return Scaffold(
       body: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _Section(
-              label: 'Connection',
-              open: _connOpen,
-              onToggle: () => setState(() => _connOpen = !_connOpen),
-              child: _connectionRow(context),
-            ),
-            // The map/list takes the slack height; folded, the page
-            // simply packs from the top over blueline paper.
-            if (_viewOpen) Expanded(child: view) else view,
-            _Section(
-              label: 'Feed health',
-              open: _healthOpen,
-              onToggle: () => setState(() => _healthOpen = !_healthOpen),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(34, 4, 12, 8),
-                child: Text(
-                  p == null
-                      ? 'waiting for the first pulse'
-                      : '${p.rxPerHour} RX/h - ${p.activeTotal} active'
-                          ' - airtime ${p.feedAirtimeSPerH} s/h'
-                          ' - up ${p.uptimeMin} min',
-                  style: Theme.of(context).textTheme.bodySmall,
+        // THE SWIPE PAGE: one tall stack over blueline paper; his
+        // finger does the moving, no inner scroll regions.
+        child: SingleChildScrollView(
+          controller: _scroll,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _Section(
+                key: _connKey,
+                label: 'Connection',
+                open: _connOpen,
+                onToggle: () =>
+                    _toggle(_connOpen, () => _connOpen = !_connOpen),
+                child: _connectionRow(context),
+              ),
+              // THE MAP'S ONE HEIGHT: measured once (initState) as
+              // the screen minus Connection + Feed health + Logs -
+              // its old expanded size, back to full size. Frozen
+              // for the app's life; folded bars leave blank paper,
+              // never a smaller map.
+              if (_viewOpen && _mapH != null)
+                SizedBox(height: _mapH, child: view)
+              else
+                view,
+              _Section(
+                key: _healthKey,
+                label: 'Feed health',
+                open: _healthOpen,
+                onToggle: () =>
+                    _toggle(_healthOpen, () => _healthOpen = !_healthOpen),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(34, 4, 12, 8),
+                  child: Text(
+                    p == null
+                        ? 'waiting for the first pulse'
+                        : '${p.rxPerHour} RX/h - ${p.activeTotal} active'
+                            ' - airtime ${p.feedAirtimeSPerH} s/h'
+                            ' - up ${p.uptimeMin} min',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
                 ),
               ),
-            ),
-            _Section(
-              label: 'Logs',
-              open: _logsOpen,
-              onToggle: () => setState(() => _logsOpen = !_logsOpen),
-              child: SizedBox(
-                height: 140,
-                child: ListView(
-                  padding: const EdgeInsets.fromLTRB(34, 6, 12, 8),
-                  children: [
-                    for (final line in widget.log)
-                      Text(line,
-                          style: Theme.of(context).textTheme.bodySmall),
-                  ],
+              _Section(
+                key: _logsKey,
+                label: 'Logs',
+                open: _logsOpen,
+                onToggle: () => _toggle(_logsOpen, () => _logsOpen = !_logsOpen),
+                child: SizedBox(
+                  height: 140,
+                  child: ListView(
+                    padding: const EdgeInsets.fromLTRB(34, 6, 12, 8),
+                    children: [
+                      for (final line in widget.log)
+                        Text(line,
+                            style: Theme.of(context).textTheme.bodySmall),
+                    ],
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -229,11 +316,15 @@ class _Section extends StatelessWidget {
   final bool open;
   final VoidCallback onToggle;
 
-  /// fill = the child takes the section's remaining height (needs a
-  /// bounded parent - the map/list section is Expanded for this).
+  /// fill = the child takes the section's remaining height (only
+  /// under the map's fixed-height SizedBox, which bounds it) - a
+  /// shrink-wrapped child would hand the list's TabBarView an
+  /// unbounded height. child is null for the first frame only,
+  /// while the map's height is still being measured.
   final bool fill;
-  final Widget child;
+  final Widget? child;
   const _Section({
+    super.key,
     required this.label,
     required this.open,
     required this.onToggle,
@@ -243,6 +334,7 @@ class _Section extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final body = child;
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -270,10 +362,10 @@ class _Section extends StatelessWidget {
           ),
         ),
         const Divider(height: 1, thickness: 1, color: Colors.white24),
-        if (open)
+        if (open && body != null)
           fill
-              ? Expanded(child: child)
-              : child,
+              ? Expanded(child: body)
+              : body,
       ],
     );
   }
