@@ -17,7 +17,7 @@
 //
 // Both feed the SAME decoded packets to the same callbacks - the link
 // is a transport, never a second decoder. The socket is injected
-// (DoorSocket): the browser build passes WebDoorSocket.new, tests
+// (DoorSocket): the native build passes IoDoorSocket.new, tests
 // pass a fake - the web app's stub-the-WebSocket lesson.
 
 import 'dart:async';

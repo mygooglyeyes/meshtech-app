@@ -16,5 +16,5 @@ abstract class DoorSocket {
   void close();
 }
 
-/// Creates the platform socket (wired in main.dart: WebDoorSocket.new).
+/// Creates the platform socket (wired in main.dart: IoDoorSocket.new).
 typedef DoorSocketFactory = DoorSocket Function();

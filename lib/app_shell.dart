@@ -143,7 +143,7 @@ class _MeshtechAppState extends State<MeshtechApp> {
     final now = heardMs ?? DateTime.now().millisecondsSinceEpoch;
     switch (packet) {
       case final Layout l:
-        setState(() {
+        _safeSetState(() {
           _frameName = l.name;
           _frameCenter = (l.centerLat, l.centerLon);
         });
@@ -158,7 +158,7 @@ class _MeshtechAppState extends State<MeshtechApp> {
       case final Pulse pl:
         _pulse = pl; // feed-health box (section: the web app's furniture)
       case final SectSum ss:
-        setState(() => _sectionRoutes = ss.routeStubs);
+        _safeSetState(() => _sectionRoutes = ss.routeStubs);
         if (ss.routeStubs.isNotEmpty) {
           _logLine('section ${ss.sectionId}: '
               '${ss.routeStubs.length} route(s) listed');
