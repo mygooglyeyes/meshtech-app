@@ -298,13 +298,19 @@ void main() {
 
     await link.sendVectoredAsk(syncMarker: 7, spanKm: 40, origin: 0x1234);
     final uplink = fake.writes.last;
-    // [62][slot][0xFF flood] + the REFRESH_REQ body - the 3-byte
-    // envelope is STRIPPED (the radio adds its own; carrying it
-    // double-wraps the packet and the host drops it silently).
+    // [62][slot][0xFF flood][data_type 2 LE] + the REFRESH_REQ body.
+    // The radio wraps type+len into the on-air plaintext itself, so
+    // the body carries NO 3-byte envelope - but data_type is its own
+    // frame field (frame_server.py): v017 omitted it, the radio read
+    // the type from the body's first two bytes, and hilltop dropped
+    // every air ask as not-scope traffic (2026-09-25 trace).
     expect(uplink[0], cmdSendChannelData);
     expect(uplink[1], 2); // the discovered slot
     expect(uplink[2], 0xff);
-    expect(uplink.length, greaterThan(3));
+    expect(uplink[3], 0x11); // data_type 0x5311 little-endian
+    expect(uplink[4], 0x53);
+    expect(uplink[5], 0x06); // body starts: proto version 0x06
+    expect(uplink.length, 5 + 16); // frame header + 16B REFRESH_REQ body
     expect(logs.any((l) => l.contains('scope uplink sent') &&
         l.contains('slot 2')), isTrue);
 

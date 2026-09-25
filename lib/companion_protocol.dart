@@ -176,12 +176,20 @@ class CompanionProtocol {
 
   /// Send a FULL scope plaintext (3-byte envelope + body) over the
   /// #scope channel: wrapped in CMD_SEND_CHANNEL_DATA with the slot
-  /// the probe found ([62][slot][0xFF]+body - the firmware parses it
-  /// that way, frame_server.py). The 3-byte type/len framing is
-  /// STRIPPED here: the radio adds its own envelope when building the
-  /// GRP_DATA plaintext, so carrying the full plaintext double-wraps
-  /// the packet and the host's decoder silently drops it (the
-  /// 2026-09-18 bug that also hid hilltop's refresh answers).
+  /// the probe found. The frame is exactly what the reference parser
+  /// reads (frame_server._cmd_send_channel_data):
+  ///
+  ///   [62][slot][0xFF path_len][data_type 2 LE][body]
+  ///
+  /// The radio then builds the on-air plaintext as
+  /// `type(2) + len(1) + body` itself, so the body travels WITHOUT
+  /// its 3-byte envelope (carrying the full plaintext double-wraps
+  /// the packet and the host drops it - the 2026-09-18 bug). But the
+  /// data_type is its own frame field: v017 omitted it, the radio
+  /// read its "type" from the body's first two bytes (0x06 version +
+  /// seq -> 0x8d06), wrapped THOSE, and hilltop honestly refused every
+  /// air ask as not-scope traffic (2026-09-25, the silent-uplink
+  /// trace - the node's v0.0.050 DEBUG named the gate).
   Future<bool> sendScope(Uint8List plaintext) async {
     int dataType;
     try {
@@ -202,11 +210,13 @@ class CompanionProtocol {
     final body = 3 + bodyLen <= plaintext.length
         ? Uint8List.sublistView(plaintext, 3, 3 + bodyLen)
         : Uint8List.sublistView(plaintext, 3);
-    final frame = Uint8List(3 + body.length);
+    final frame = Uint8List(5 + body.length);
     frame[0] = cmdSendChannelData;
     frame[1] = slot;
     frame[2] = 0xff; // flood
-    frame.setAll(3, body);
+    frame[3] = dataType & 0xff; // data_type - its own field (v018)
+    frame[4] = (dataType >> 8) & 0xff;
+    frame.setAll(5, body);
     final hex = dataType.toRadixString(16).padLeft(4, '0');
     return _writeRaw(frame,
         'scope uplink sent (type 0x$hex, ${body.length}B body, slot $slot)'
