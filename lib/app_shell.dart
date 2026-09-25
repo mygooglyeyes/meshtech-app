@@ -17,12 +17,12 @@ import 'dart:async';
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart' hide Route;
 
-import 'browser_screen.dart';
 import 'codec.dart';
 import 'connect_screen.dart';
 import 'door_socket.dart';
 import 'grid.dart';
 import 'link.dart';
+import 'main_page.dart';
 import 'map_model.dart';
 import 'settings.dart';
 import 'store.dart';
@@ -274,21 +274,58 @@ class _MeshtechAppState extends State<MeshtechApp> {
       _store.wipe();
     }
     super.dispose();
+  }  /// THE BLUELINE PALETTE (Brett, 2026-09-25): the logo's drafting
+  /// print - #0f3a72 blue paper, white lines and text. Section
+  /// plates lift one shade; white edges draw the lines. Shades are
+  /// bench-tunable later (his call), the two colors are the law.
+  ThemeData _bluelineTheme() {
+    const blue = Color(0xFF0F3A72);
+    const plate = Color(0xFF123F73);
+    final scheme = ColorScheme.fromSeed(
+      seedColor: blue,
+      brightness: Brightness.dark,
+    ).copyWith(
+      surface: blue,
+      surfaceContainer: plate,
+      surfaceContainerHigh: const Color(0xFF164A85),
+      surfaceContainerHighest: const Color(0xFF164A85),
+    );
+    return ThemeData(
+      useMaterial3: true,
+      colorScheme: scheme,
+      scaffoldBackgroundColor: blue,
+      dividerColor: Colors.white24,
+      textTheme: ThemeData.dark()
+          .textTheme
+          .apply(bodyColor: Colors.white, displayColor: Colors.white),
+      appBarTheme: const AppBarTheme(
+        backgroundColor: blue,
+        foregroundColor: Colors.white,
+        elevation: 0,
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'meshtech',
-      theme: ThemeData(colorSchemeSeed: const Color(0xFF4A90D9)),            home: _linkState == LinkState.connected
-          ? BrowserScreen(
+      theme: _bluelineTheme(),
+      home: _linkState == LinkState.connected
+          ? MainPage(
               store: _store,
               settings: _settings,
+              frameName: _frameName,
+              frameCenter: _frameCenter,
               pulse: _pulse,
               log: _log,
-              frameName: _frameName,
+              linkDetail: _linkDetail,
               onDisconnect: _disconnect,
               onAsk: _ask,
+              onMapSizeChange: _changeMapSize,
+              onDotTap: _onDotTap,
+              tappedPrefix: _tappedPrefix,
+              sectionRouteIds: _sectionRoutes,
             )
           : Scaffold(
               // ConnectScreen draws TextFields: it needs a Material

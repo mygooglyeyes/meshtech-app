@@ -1,14 +1,14 @@
-// THE BROWSER LIST (Brett, 2026-09-24): the map is stripped out
-// TEMPORARILY and replaced by a browsable list of every node and
-// route the phone holds from the server (connect + refresh fills).
-// Purpose: see EXACTLY what the server sent, unobscured by map
-// drawing - so a partial list is a data fact, not a rendering
-// question. The map screen stays in the repo (map_screen.dart) and
-// returns when Brett says so.
+// THE LIST PANE (Brett, 2026-09-25): the browsable list of every
+// node and route the phone holds from the server (connect + refresh
+// fills) - now the LIST half of the main page's map/list swap. The
+// map draws beside it under the same section bars; feed health and
+// logs live in their own sections on the main page. (History:
+// 2026-09-24 this view TEMPORARILY replaced the map so a partial
+// list was a data fact, not a rendering question.)
 
 import 'package:flutter/material.dart' hide Route;
 
-import 'codec.dart';
+import 'codec.dart'; // the WIRE Route (Flutter's Route is hidden above)
 import 'map_model.dart';
 import 'settings.dart';
 import 'store.dart';
@@ -17,9 +17,6 @@ class BrowserScreen extends StatefulWidget {
   final NodeStore store;
   final ConnectionSettings settings;
   final String? frameName;
-  final Pulse? pulse;
-  final List<String> log;
-  final VoidCallback onDisconnect;
   final VoidCallback onAsk; // the ↻ refresh (the vectored ask)
 
   const BrowserScreen({
@@ -27,9 +24,6 @@ class BrowserScreen extends StatefulWidget {
     required this.store,
     required this.settings,
     this.frameName,
-    this.pulse,
-    this.log = const [],
-    required this.onDisconnect,
     required this.onAsk,
   });
 
@@ -42,82 +36,53 @@ class _BrowserScreenState extends State<BrowserScreen> {
   Widget build(BuildContext context) {
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final dots = MapViewModel.dots(widget.store, nowMs: nowMs);
-    final p = widget.pulse;
     final title = (widget.frameName == null || widget.frameName!.isEmpty)
         ? 'Hilltop area'
         : widget.frameName!;
     return DefaultTabController(
       length: 2,
-      child: Scaffold(
-        appBar: AppBar(
-          title: Text('$title - ${widget.settings.mapSizeKm} km view'),
-          actions: [
-            // THE REFRESH: the same vectored ask the map screen had.
-            IconButton(
-              tooltip: 'Refresh now (ask the server)',
-              icon: const Icon(Icons.refresh),
-              onPressed: widget.onAsk,
-            ),
-            IconButton(
-              tooltip: 'Disconnect',
-              icon: const Icon(Icons.link_off),
-              onPressed: widget.onDisconnect,
-            ),
-          ],
-          bottom: TabBar(
-            tabs: [
-              Tab(text: 'Nodes (${dots.length})'),
-              Tab(text: 'Routes (${widget.store.routes.length})'),
-            ],
-          ),
-        ),
-        body: Column(
-          children: [
-            // THE FEED-HEALTH LINE, still honest, still fed by PULSE.
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12,
-                  vertical: 6),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  p == null
-                      ? 'Feed health: waiting for the first pulse'
-                      : 'Feed health: ${p.rxPerHour} RX/h - '
-                          '${p.activeTotal} active - airtime '
-                          '${p.feedAirtimeSPerH} s/h - up '
-                          '${p.uptimeMin} min',
-                  style: Theme.of(context).textTheme.bodySmall,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // THE LIST'S OWN BAR: area title + the Update ask (the main
+          // page's section bars frame this view now, 2026-09-25).
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 4, 0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '$title - ${widget.settings.mapSizeKm} km view',
+                    style: Theme.of(context).textTheme.titleMedium,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
-              ),
+                IconButton(
+                  tooltip: 'Refresh now (ask the server)',
+                  icon: const Icon(Icons.refresh),
+                  onPressed: widget.onAsk,
+                ),
+              ],
             ),
-            Expanded(
-              child: TabBarView(
-                children: [
-                  _nodeList(context, dots),
-                  _routeList(context),
-                ],
-              ),
+          ),
+          Material(
+            color: Theme.of(context).colorScheme.surfaceContainer,
+            child: TabBar(
+              tabs: [
+                Tab(text: 'Nodes (${dots.length})'),
+                Tab(text: 'Routes (${widget.store.routes.length})'),
+              ],
             ),
-            // THE LOG, scrollable in full (Brett: the log must be
-            // readable, every line).
-            Container(
-              height: 140,
-              width: double.infinity,
-              color: Theme.of(context)
-                  .colorScheme
-                  .surfaceContainerHighest,
-              child: ListView(
-                padding: const EdgeInsets.all(8),
-                children: [
-                  for (final line in widget.log)
-                    Text(line,
-                        style:
-                            Theme.of(context).textTheme.bodySmall),
-                ],
-              ),
+          ),
+          Expanded(
+            child: TabBarView(
+              children: [
+                _nodeList(context, dots),
+                _routeList(context),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

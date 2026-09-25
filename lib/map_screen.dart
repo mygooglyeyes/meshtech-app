@@ -19,7 +19,6 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:maplibre/maplibre.dart';
 
-import 'codec.dart';
 import 'map_model.dart';
 import 'settings.dart';
 import 'store.dart';
@@ -33,11 +32,7 @@ const mapStyleUrl =
 class MapScreen extends StatefulWidget {
   final NodeStore store;
   final ConnectionSettings settings;
-  final String? frameName;
   final (double, double)? frameCenter;
-  final Pulse? pulse;
-  final List<String> log;
-  final VoidCallback onDisconnect;
   final VoidCallback onAsk; // THE UPDATE BUTTON: the phone asks, over the door
   final ValueChanged<int> onMapSizeChange; // +/- = 20/40/60, redraw only
   final ValueChanged<DotVM> onDotTap; // A TAP = AN ASK (section 10)
@@ -48,11 +43,7 @@ class MapScreen extends StatefulWidget {
     super.key,
     required this.store,
     required this.settings,
-    this.frameName,
     this.frameCenter,
-    this.pulse,
-    this.log = const [],
-    required this.onDisconnect,
     required this.onAsk,
     required this.onMapSizeChange,
     required this.onDotTap,
@@ -156,31 +147,11 @@ class _MapScreenState extends State<MapScreen> {
     final home = s.homeLon != 0
         ? (s.homeLat, s.homeLon)
         : widget.frameCenter ?? (38.0, -122.0);
-    final title = (widget.frameName == null || widget.frameName!.isEmpty)
-        ? 'Hilltop area'
-        : widget.frameName!;
-    final p = widget.pulse;
     return Scaffold(
-      appBar: AppBar(
-        title: Text('$title - ${s.mapSizeKm} km view'),
-        actions: [
-          // THE UPDATE BUTTON (Brett, 2026-09-24): the phone asks for
-          // the area data NOW - the same ask the web app's update sent
-          // (whole-area REFRESH_REQ, the sync marker riding it). The
-          // server's rate limiter answers or refuses in plain words;
-          // refusals land in the log box.
-          IconButton(
-            tooltip: 'Update now (ask hilltop)',
-            icon: const Icon(Icons.refresh),
-            onPressed: widget.onAsk,
-          ),
-          IconButton(
-            tooltip: 'Disconnect',
-            icon: const Icon(Icons.link_off),
-            onPressed: widget.onDisconnect,
-          ),
-        ],
-      ),
+      // No app bar of its own: the main page's SECTION BARS frame
+      // the map (Brett's layout, 2026-09-25). The map keeps its own
+      // furniture on the canvas - recenter, refresh, and the +/-
+      // coverage steps.
       body: Column(
         children: [
           Expanded(
@@ -361,6 +332,15 @@ class _MapScreenState extends State<MapScreen> {
                                 lon: home.$2, lat: home.$1),
                             zoom: _zoomFor(s.mapSizeKm)),
                       ),
+                      // THE UPDATE (Brett, 2026-09-24): the phone asks
+                      // for the area data NOW - map furniture, as the
+                      // web app had it. Refusals land in the log
+                      // section below.
+                      _NavButton(
+                        icon: Icons.refresh,
+                        tooltip: 'Update now (ask hilltop)',
+                        onTap: widget.onAsk,
+                      ),
                       // THE SIZE BUTTONS (Brett, 2026-09-24): +/-
                       // step through the 20/40/60 map sizes and
                       // re-center - a REDRAW ONLY change (rule 2),
@@ -399,9 +379,9 @@ class _MapScreenState extends State<MapScreen> {
               ],
             ),
           ),
-          // THE FEED-HEALTH BOX + THE LOG (the web app's furniture):
-          // the PULSE rides the whole-area answer; until one arrives
-          // the box says so honestly. The log keeps the last lines.
+          // THE MAP'S OWN STATS LINE: dots held, stale count, and
+          // how many routes the last tap-ask named. (Feed health and
+          // the log moved to the main page's own sections.)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8),
             child: Text(
@@ -410,44 +390,7 @@ class _MapScreenState extends State<MapScreen> {
               '${widget.sectionRouteIds.isEmpty ? '' : ' - '
                   '${widget.sectionRouteIds.length} route(s) asked'}',
               style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ),
-          ExpansionTile(
-            title: Text(
-              p == null
-                  ? 'Feed health: waiting for the first pulse'
-                  : 'Feed health: ${p.rxPerHour} RX/h, '
-                      '${p.activeTotal} active',
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-            childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-            children: [
-              if (p != null) ...[
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    'RX ${p.rxPerHour}/h - airtime '
-                    '${p.feedAirtimeSPerH} s/h - ${p.activeTotal} '
-                    'active - up ${p.uptimeMin} min',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ),
-                const SizedBox(height: 4),
-              ],
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    for (final line in widget.log.take(8))
-                      Text(line,
-                          style:
-                              Theme.of(context).textTheme.bodySmall),
-                  ],
-                ),
-              ),
-            ],
-          ),
+            ),          ),
         ],
       ),
     );
