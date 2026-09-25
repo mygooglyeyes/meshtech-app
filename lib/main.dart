@@ -1,13 +1,14 @@
-// The default entrypoint (mobile/desktop): the app shell with the
-// honest no-socket default - the Android app rides the BLE companion
-// link (the MAIN feature), not the TCP door. The TCP link becomes
-// available on Android when its entrypoint wires a dart:io socket
-// implementation of DoorSocket.
+// The native (Android/desktop) entrypoint: the app shell with a REAL
+// dart:io door socket - the bench transport that talks to hilltop's
+// data door exactly like the web app did (same URL shape, same
+// bearer.<password> subprotocol). The BLE companion link (the MAIN
+// feature) is the inert honest slot until Brett's hardware go.
 
 import 'package:flutter/material.dart';
 
 import 'app_shell.dart';
+import 'io_door_socket.dart';
 
 void main() {
-  runApp(const MeshtechApp());
+  runApp(const MeshtechApp(socketFactory: IoDoorSocket.new));
 }

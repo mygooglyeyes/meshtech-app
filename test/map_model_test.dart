@@ -39,8 +39,29 @@ void main() {
     s.upsert(const NodeRecord(prefix: 0x22, name: 'Old',
         lat: 38.1, lon: -122.1, lastHeardMs: now - 15 * 24 * 3600 * 1000));
     final dots = MapViewModel.dots(s, nowMs: now);
-    expect(dots[0].color, DotColor.fresh); // 13 days: still blue
-    expect(dots[1].color, DotColor.stale); // 15 days: yellow
+    expect(dots[0].color, DotColor.silent); // 13 days: past the 3-day RED line
+    expect(dots[1].color, DotColor.stale); // 15 days: the 14-day law
+  });
+
+  test("Brett's silence law: unheard 3 days = RED, heard again = regular", () {
+    final s = NodeStore();
+    const now = 100 * 24 * 3600 * 1000; // day 100
+    s.upsert(const NodeRecord(prefix: 0x11, name: 'Quiet',
+        lat: 38.0, lon: -122.0, lastHeardMs: now - 3 * 24 * 3600 * 1000 - 1));
+    s.upsert(const NodeRecord(prefix: 0x22, name: 'JustFresh',
+        lat: 38.1, lon: -122.1, lastHeardMs: now - 3 * 24 * 3600 * 1000 + 1));
+    s.upsert(const NodeRecord(prefix: 0x33, name: 'VeryOld',
+        lat: 38.2, lon: -122.2, lastHeardMs: now - 15 * 24 * 3600 * 1000));
+    final dots = MapViewModel.dots(s, nowMs: now);
+    expect(dots[0].color, DotColor.silent); // 3 days + 1 ms: RED
+    expect(dots[1].color, DotColor.fresh);  // just under 3 days: regular
+    expect(dots[2].color, DotColor.stale);  // 15 days: still the 14-day law
+    // heard again: the fresh advert REPLACES the record (upsert law),
+    // so the very same node is instantly un-red.
+    s.upsert(const NodeRecord(prefix: 0x11, name: 'Quiet',
+        lat: 38.0, lon: -122.0, lastHeardMs: now));
+    expect(MapViewModel.dots(s, nowMs: now).singleWhere(
+            (d) => d.prefix == 0x11).color, DotColor.fresh);
   });
 
   test('section counts are counted on the VIEW (re-cut honest)', () {

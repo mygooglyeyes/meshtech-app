@@ -151,10 +151,58 @@ class NodeStore {
             NodeRecord.fromJson(j.cast<String, Object?>()))]);
   }
 
+  /// ROUTES (design section 10): the answer to a tap-ask. Keyed by
+  /// the wire's route_id; UPSERT-REPLACE like everything else - the
+  /// newest answer for a route IS the route. RAM-only for now: the
+  /// bulk route history rides the initial TCP download (not built
+  /// yet); air-learned routes re-ask cheaply after a restart.
+  final Map<int, Route> _routes = {};
+
+  /// BRETT'S ROUTE FADE (2026-09-24): a DIRECT route silent 3 days is
+  /// STALE (listed yellow), 7 days DEAD; a MULTI-HOP route 7/14. The
+  /// server deletes its dead routes; the phone also refuses to take a
+  /// past-dead answer back (an honest deletion, not a stale fade).
+  static const directStaleAfterMin = 3 * 1440;
+  static const multihopStaleAfterMin = 7 * 1440;
+  static const directDeadAfterMin = 7 * 1440;
+  static const multihopDeadAfterMin = 14 * 1440;
+
+  static bool routeIsDirect(Route r) => r.prefixes.length <= 1;
+
+  static int routeDeadAfterMin(Route r) => routeIsDirect(r)
+      ? directDeadAfterMin
+      : multihopDeadAfterMin;
+
+  void applyRoute(Route r) {
+    // lastHeardMin rides the wire as the route's age in minutes.
+    if (r.lastHeardMin > routeDeadAfterMin(r)) return; // DEAD: drop it
+    _routes[r.routeId] = r;
+  }
+
+  Route? route(int routeId) => _routes[routeId];
+
+  Iterable<Route> get routes => _routes.values;
+
   /// Forget everything (the node restarted and its seq regressed -
   /// the phone's view is stale; a fresh LAYOUT redraws it).
   void resetAll() {
     _nodes.clear();
     _gonePending.clear();
+    _routes.clear();
+  }
+
+  /// FRESH-INSTALL WIPE (Brett's bench law, 2026-09-24): a DEBUG
+  /// build calls this at every launch - data, routes and the sync
+  /// marker erased from flash too, so the bench is a true first run
+  /// every time. RELEASE builds never call this (section 4: the
+  /// phone keeps its store for the offline trail). Connection
+  /// settings (address/password/ZIP/size) are NOT part of this -
+  /// they live in SettingsStore, not the data store.
+  Future<void> wipe() async {
+    resetAll();
+    _syncMarker = 0;
+    final sp = await SharedPreferences.getInstance();
+    await sp.remove(_persistKey);
+    await sp.remove(_markerKey);
   }
 }

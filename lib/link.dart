@@ -34,7 +34,9 @@ class LinkEvents {
   final void Function(Object packet, {int? heardMs})? onPacket;
   final void Function(String line)? onLog;
   final void Function()? onReset; // the node restarted (seq regressed)
-  const LinkEvents({this.onState, this.onPacket, this.onLog, this.onReset});
+  final void Function()? onConnected; // the door said hello (state ok)
+  const LinkEvents(
+      {this.onState, this.onPacket, this.onLog, this.onReset, this.onConnected});
 }
 
 abstract class Link {
@@ -57,19 +59,41 @@ class TcpLink implements Link {
   final DoorSocketFactory socketFactory;
   final int watchdogMs;
   final int watchdogTickMs;
+  // THE FIRST-CONNECT ASK (DESIGN.md 10): when the door says hello,
+  // the phone asks for the area data BY ITSELF - marker 0 = full
+  // roster (Brett's law), marker N = only changes. spanKm 0 = no ask
+  // (tests / not-yet-wired shells).
+  final int askMarker;
+  final int askSpanKm;
+  final int askOrigin;
   DoorSocket? _socket;
   LinkState _state = LinkState.disabled;
   int _lastSeq = 0;
   bool _wantRun = false;
   int _lastAliveMs = 0;
   Timer? _watchdog;
+  // THE ZERO-DOTS LAW (the web app's lesson, re-learned on this
+  // bench 2026-09-24): INTRO positions are DELTAS against the map
+  // center - decoding them against (0,0) lands every dot ~10,000 km
+  // away. The server sends the LAYOUT first; the link remembers it
+  // and decodes every INTRO against it. An INTRO that arrives before
+  // any LAYOUT is HELD (loudly), never silently mis-placed.
+  Layout? _layout;
+
+  /// The heard map geometry (the server's 3x3 frame): what section
+  /// asks are computed against and what INTROs decode against.
+  Layout? get layout => _layout;
+  final List<Uint8List> _heldIntros = [];
 
   TcpLink(this.events,
       {required this.host,
       required this.password,
       required this.socketFactory,
       this.watchdogMs = watchdogTimeoutMs,
-      this.watchdogTickMs = _watchdogTickMs});
+      this.watchdogTickMs = _watchdogTickMs,
+      this.askMarker = 0,
+      this.askSpanKm = 0,
+      this.askOrigin = 0});
 
   @override
   LinkState get state => _state;
@@ -97,27 +121,30 @@ class TcpLink implements Link {
     }
     _wantRun = true;
     _setState(LinkState.connecting);
-    final socket = socketFactory();
-    socket.onOpen = () {
-      // hello arrives as the first message; state is reported there.
-    };
-    socket.onMessage = _onMessage;
-    socket.onClose = (code, clean) {
-      _log('link closed: code=$code clean=$clean');
-      _stopWatchdog();
-      if (!_wantRun) return;
-      _wantRun = false;
-      _setState(LinkState.disabled, 'link closed (code $code)');
-    };
     try {
+      // The factory INSIDE the try: a missing/unwired socket must
+      // refuse in plain words, never hang the button on Connecting
+      // (bench lesson 2026-09-24).
+      final socket = socketFactory();
+      socket.onOpen = () {
+        // hello arrives as the first message; state is reported there.
+      };
+      socket.onMessage = _onMessage;
+      socket.onClose = (code, clean) {
+        _log('link closed: code=$code clean=$clean');
+        _stopWatchdog();
+        if (!_wantRun) return;
+        _wantRun = false;
+        _setState(LinkState.disabled, 'link closed (code $code)');
+      };
       socket.open(doorUrl(host),
           password.isEmpty ? null : ['bearer.$password']);
+      _socket = socket;
     } catch (err) {
       _wantRun = false;
       _setState(LinkState.disabled, 'bad address: $err');
       return;
     }
-    _socket = socket;
   }
 
   @override
@@ -139,14 +166,29 @@ class TcpLink implements Link {
     final type = msg['type'] as String?;
     if (type == 'hello') {
       _setState(LinkState.connected, 'node proto ${msg['proto'] ?? '?'}');
+      _log('door connected: ${doorUrl(host)} - receiving on the TCP pipe');
       _lastAliveMs = DateTime.now().millisecondsSinceEpoch;
       _startWatchdog();
       final lastSeq = (msg['last_seq'] as num?)?.toInt() ?? 0;
       if (lastSeq < _lastSeq) {
         _lastSeq = 0;
+        // The node restarted: its map geometry died with its RAM -
+        // the old center is no longer the truth.
+        _layout = null;
+        _heldIntros.clear();
         events.onReset?.call();
       }
       _send({'type': 'resume', 'after_seq': _lastSeq});
+      // THE FIRST-CONNECT ASK, BY ITSELF (DESIGN.md 10 + the
+      // Brett's-law restatement 2026-09-24): hello = the door is open
+      // -> ask for the area data. Marker 0 (first run / nothing yet)
+      // = the server sends the FULL roster it holds for the area;
+      // marker N = only what changed since. No button, no waiting
+      // on the background schedule.
+      if (askSpanKm > 0) {
+        sendVectoredAsk(
+            syncMarker: askMarker, spanKm: askSpanKm, origin: askOrigin);
+      }
       return;
     }
     if (type == 'packet') {
@@ -160,7 +202,41 @@ class TcpLink implements Link {
           for (var i = 0; i + 1 < wire.length; i += 2)
             int.parse(wire.substring(i, i + 2), radix: 16),
         ];
-        final packet = decodeAny(Uint8List.fromList(bytes));
+        final packetBytes = Uint8List.fromList(bytes);
+        if (peekDataType(packetBytes) == typeIntro) {
+          if (_layout == null) {
+            // Honest hold: no center yet, and a wrong center is the
+            // zero-dots bug wearing a disguise. The LAYOUT is always
+            // first in a burst, so this flushes within milliseconds.
+            _heldIntros.add(packetBytes);
+            _log('INTRO held - no map center heard yet');
+            return;
+          }
+          final intro = decodeIntro(packetBytes.sublist(3),
+              centerLat: _layout!.centerLat,
+              centerLon: _layout!.centerLon);
+          events.onPacket?.call(intro,
+              heardMs: DateTime.now().millisecondsSinceEpoch);
+          return;
+        }
+        final packet = decodeAny(packetBytes);
+        // THE HONEST RECEIPT (Brett, 2026-09-24): every packet the
+        // phone receives is logged with its type and the pipe it
+        // came in on - no silent data, no guessed pipes.
+        _log('door <- ${_packetName(packet)}');
+        if (packet is Layout) {
+          _layout = packet;
+          // Flush anything held while the center was unknown.
+          final held = List<Uint8List>.from(_heldIntros);
+          _heldIntros.clear();
+          for (final b in held) {
+            final intro = decodeIntro(b.sublist(3),
+                centerLat: _layout!.centerLat,
+                centerLon: _layout!.centerLon);
+            events.onPacket?.call(intro,
+                heardMs: DateTime.now().millisecondsSinceEpoch);
+          }
+        }
         events.onPacket?.call(packet,
             heardMs: DateTime.now().millisecondsSinceEpoch);
       } catch (err) {
@@ -204,11 +280,15 @@ class TcpLink implements Link {
       _log('not connected - refresh NOT sent');
       return;
     }
+    // THE DOOR'S PER-KIND FIELD (bench-found bug 2026-09-24): the
+    // server reads the section number from 'section' and a route id
+    // from 'target' - the web app's exact JSON (App.ts). A wrong
+    // field name is a SILENT server-side drop: no log, no answer.
     _send({
       'type': 'refresh',
       'req_id': reqId,
       'kind': kind,
-      'target': target,
+      if (kind == 'section') 'section': target else 'target': target,
       'origin': origin,
       'span_km': spanKm,
       'wire': [for (final b in payload)
@@ -218,7 +298,60 @@ class TcpLink implements Link {
         '${spanKm > 0 ? ', $spanKm km window' : ''})');
   }
 
+  /// The vectored ask (VECTORED-SYNC-DESIGN section 3, DESIGN.md 10):
+  /// a whole-area REFRESH_REQ with the phone's marker riding it.
+  /// Marker 0 = first run = the server answers with the FULL roster
+  /// it holds for the area (Brett's first-connect law). Kind 1 +
+  /// target 0 is the exact whole-area shape the web app sends
+  /// (App.ts sendRefresh(REFRESH_KIND_SECTION, REFRESH_WHOLE_AREA));
+  /// the answer arrives as INTRO batches + PULSE (+ GONE packets).
+  void sendVectoredAsk(
+      {required int syncMarker, required int spanKm, int origin = 0}) {
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final req = RefreshReq(
+      seq: nowMs & 0xFFFF,
+      kind: refreshKindSection,
+      target: refreshWholeArea,
+      nonce: (nowMs >> 4) & 0xFFFF,
+      origin: origin,
+      spanKm: spanKm,
+      syncMarker: syncMarker,
+    );
+    sendRefreshWire(encodeRefreshReq(req), 'ask-${req.seq}', 'map',
+        refreshWholeArea, origin, spanKm);
+  }
+
+  /// THE TAP-ASK (design section 10): tapping a node asks the SERVER
+  /// section that node sits in - the answer carries SECT_SUM + its
+  /// top routes + the section's nodes. Section asks carry span 0
+  /// (the web app's exact pattern, App.ts) and marker 0: the
+  /// vectored filter is the roster's business, not a section's.
+  void sendSectionAsk(
+      {required int sectionId, required int origin}) {
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final req = RefreshReq(
+      seq: nowMs & 0xFFFF,
+      kind: refreshKindSection,
+      target: sectionId,
+      nonce: (nowMs >> 4) & 0xFFFF,
+      origin: origin,
+    );
+    sendRefreshWire(encodeRefreshReq(req), 'sec-${req.seq}-$sectionId',
+        'section', sectionId, origin, 0);
+  }
+
   void _send(Map<String, Object?> obj) => _socket?.send(jsonEncode(obj));
+
+  /// The packet's plain name for the receipt log.
+  static String _packetName(Object p) => switch (p) {
+        Layout() => 'layout (map frame)',
+        Intro i => 'intro (${i.entries.length} node(s))',
+        Pulse() => 'pulse (feed health)',
+        SectSum s => 'section ${s.sectionId} summary',
+        Route r => 'route ${r.routeId} (${r.prefixes.length} hop(s))',
+        Gone g => 'gone (${g.prefixes.length} node(s))',
+        _ => 'packet',
+      };
 
   void _startWatchdog() {
     _stopWatchdog();

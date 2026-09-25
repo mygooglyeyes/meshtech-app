@@ -1,7 +1,83 @@
 # meshtech-app - TODOS (order matters, top first)
 
-## BUILT, UNCOMMITTED (2026-09-24): MAP SCREEN (step 3) - analyzer
-## clean, 34 tests green, DEBUG APK BUILDS
+## BUILT, UNCOMMITTED (2026-09-24, Brett's "correct" + additions): ROUTE
+## FADE + NODE RED + ROUTE TIMING on the phone - 49 tests green, analyzer
+## clean (same 5 map-leftover warnings as before). SERVER half (meshtech-
+## node, version 00.000.046, 300 tests green): routes-on-disk (routes
+## table in the same SQLite as nodes, written through at every hearing,
+## refilled at boot), DIRECT routes now FORM (a packet heard with no
+## repeaters = a one-hop route - the old code threw them away), the fade
+## runs on the layout cadence: DIRECT silent 3d = stale, 7d = deleted;
+## MULTI-HOP 7d/14d. A route row carries path, sender, is_direct,
+## section heard in, count, median delay (honest origin stamps, 0 =
+## unknown), last-heard. A route's death NEVER touches the node table.
+PHONE SIDE: a node unheard 3 DAYS turns RED (heard again = regular
+instantly, derived from age); a route silent past its stale line
+(direct 3d / multi-hop 7d) lists YELLOW with a STALE tag in the
+Routes tab; the route's MEASURED start-to-end time shows in the list
+("time start-to-end: N s", "unknown" when the wire carried no honest
+stamps); the store REFUSES a past-dead route answer (direct > 7d,
+multi-hop > 14d). Analyzer note: browser_screen.dart now hides
+Flutter's Navigator Route (same name clash app_shell already solved).
+NEXT: bench-verify against hilltop after Brett's deploy word; queued
+open-sequence chapter still waits for his go.
+
+## PREVIOUSLY BUILT, UNCOMMITTED (2026-09-24, Brett's "routes next"): ROUTE
+## LAYER + 3x4 VIEW GRID + SIZE BUTTONS - 44 tests green, analyzer clean
+ROUTES (design section 10, tap = ask = answer): tapping a node's
+label asks the SERVER section that node sits in (the wire's 3x3
+frame, real geography); the answer (SECT_SUM + its top ROUTEs)
+lands in the store and draws dot-to-dot in travel order.
+Highlighted = the tapped section's routes (thick orange); faint =
+the rest. HONEST GAPS: a route hop with an unknown/position-less
+node SPLITS the line - drawn only between known ends, never
+invented. Store: routes keyed by route_id, UPSERT-REPLACE (the
+newest answer IS the route), RAM-only (bulk route history rides
+the future TCP download). Flutter's Navigator Route hidden in
+app_shell.dart - the wire's Route is the one that file means.
+VIEW GRID: 3 wide x 4 tall (Brett's pick) cut on the VISIBLE
+region (getVisibleRegion, rebuilt on camera events, epsilon ==),
+count badges per cell, north-up flip verified by test (caught the
+missing flip in counts).
+SIZE BUTTONS: + = closer (60->40->20), - = farther, re-center on
+home, REDRAW ONLY (rule 2), persisted.
+STYLUS OFF in all three fields (Brett's call after the Gboard
+fight).
+NEXT: the queued open-sequence chapter (settings dialog + connect
+box) waits for Brett's go; so does the map-center exploration.
+
+
+## QUEUED (Brett, 2026-09-24, AFTER grid/routes): APP OPEN SEQUENCE
+- FIRST RUN opens a "settings" dialog: TCP address (if available or
+  known), ZIP code, map size, and the BLE/companion information -
+  the COMPANION TYPE: BLE, WiFi, or USB.
+- Save closes settings into a "connect" box holding the choices:
+  a BIG 'companion' button (already highlighted), a TCP button, a
+  "settings" button to edit, and a "Connect" button that uses the
+  choices made in the connect box.
+- Build order: grid/routes FIRST, then this - Brett said so. Not
+  started.
+
+## QUEUED (Brett, 2026-09-24): EXPLORE - WHAT CENTERS THE MAP
+- Viability + necessity of the person's CURRENT LOCATION (phone
+  position) as the map center vs centering on the SERVER NODE's
+  location. Also open: coordinates instead of ZIP for the home
+  area? Brett is unsure - needs a real explore + his decision
+  (DESIGN.md section 9 says ZIP today; any change is HIS call).
+- Nothing built until he picks.
+
+## LESSON (2026-09-24, bench emulator): ADD NOTHING UNASKED - HE MEANS IT
+Buffy flipped the virtual phone's hw.keyboard=yes (a PC-keyboard
+convenience NOBODY asked for) - it made Gboard collapse to a
+floating tab and wrecked the on-screen keyboard. Brett: "remove that
+feature I never asked for". Undone (hw.keyboard=no, factory wipe);
+the bench phone is stock. The rule is not just about app code - it
+covers the whole toolchain. Also: Brett's approved logo lives in
+C:\projects\visuals (logo-draft-2.svg) - read that folder's
+CONTEXT before claiming anything about the logo.
+
+## DONE - STEP 3 (2026-09-24, committed d2e9242 + pushed origin/dev):
+## MAP SCREEN - analyzer clean, 34 tests green, DEBUG APK BUILDS
 lib/map_model.dart: the map's view-model - one dot per positioned
 node (no fix = no dot), stale = the 14-day line (fresh #4A90D9 /
 stale #F5C518), section counts counted ON THE VIEW, labels = name
@@ -21,8 +97,9 @@ install); gradle auto-added platform 35 + CMake 3.22.1; maplibre
 android/settings.gradle.kts, drop the pin when 0.3.7 lands.
 flutter build apk --debug = BUILT
 (build\app\outputs\flutter-apk\app-debug.apk).
-NEXT when Brett says go: commit step 3, then routes/sections/health
-or a first TCP connect at the bench.
+NEXT when Brett says go: routes/sections/health, or a first TCP
+connect at the bench (APK is at
+build\app\outputs\flutter-apk\app-debug.apk).
 
 ## DONE - STEP 2 (2026-09-24, committed 5b7d483 + pushed): CONNECT
 ## SCREEN + LINK LAYER - flutter test 29 ALL GREEN
