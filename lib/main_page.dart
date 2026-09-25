@@ -36,6 +36,10 @@ class MainPage extends StatefulWidget {
   final Pulse? pulse;
   final List<String> log;
   final String linkDetail;
+
+  /// The connection pill's label: which pipe is live (app_shell owns
+  /// the dual-link truth: 'Radio active' / 'TCP active' / 'Radio + TCP').
+  final String linkLabel;
   final VoidCallback onDisconnect;
   final VoidCallback onAsk; // the vectored ask (Update)
   final ValueChanged<int> onMapSizeChange; // the map's +/- (rule 2)
@@ -56,6 +60,7 @@ class MainPage extends StatefulWidget {
     this.pulse,
     this.log = const [],
     this.linkDetail = '',
+    this.linkLabel = 'TCP active',
     required this.onDisconnect,
     required this.onAsk,
     required this.onMapSizeChange,
@@ -229,8 +234,8 @@ class _MainPageState extends State<MainPage> {
       padding: const EdgeInsets.fromLTRB(12, 6, 6, 6),
       child: Row(
         children: [
-          // Link-active pill: which door is live, at a glance.
-          _Pill(label: 'TCP active', detail: widget.linkDetail),
+          // Link-active pill: which pipe is live, at a glance.
+          _Pill(label: widget.linkLabel, detail: widget.linkDetail),
           const SizedBox(width: 8),
           // Coverage indicator: follows the map's +/- (rule 2 redraw).
           _Pill(label: '${s.mapSizeKm} km'),

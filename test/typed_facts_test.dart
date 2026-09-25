@@ -48,6 +48,10 @@ void main() {
         socketFactory: RecordingSocket.new));
     await tester.pumpAndSettle();
 
+    // The door fields only exist once the TCP chip is chosen (the
+    // 4-way selector's law: pick a link, THEN connect).
+    await tester.tap(find.widgetWithText(ChoiceChip, 'TCP'));
+    await tester.pumpAndSettle();
     await tester.enterText(
         find.widgetWithText(TextField, 'Hilltop address'),
         '192.168.12.145');

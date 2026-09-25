@@ -1,4 +1,18 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- The companion radio link (BLE, the main feature). The
+         No-Location variant: BLUETOOTH_SCAN never derives location,
+         so no location permission is needed on Android 12+; the
+         legacy pair and location cover Android 11 and older.
+         flutter_blue_plus requests the runtime grants itself. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"
+        android:maxSdkVersion="30" />
     <application
         android:label="meshtech_app"
         android:name="${applicationName}"

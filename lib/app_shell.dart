@@ -1,14 +1,18 @@
 // The app shell (moved out of main.dart so VM tests can pump it):
-// ConnectScreen (address + password + MAP SIZE before connect) ->
-// live link -> the store fills -> MapScreen draws the store over
-// MapLibre. The companion link (BLE, the MAIN feature) is the inert
-// honest slot until the hardware go; TcpLink is today's testable
-// transport (and the off-wire download later).
+// ConnectScreen (4-way link chips + the facts the pick needs + MAP
+// SIZE) -> the SELECTED link connects (nothing ever starts on its
+// own) -> the store fills -> MapScreen draws the store over MapLibre.
+// TWO PIPES, ONE STORE: the companion link (BLE, the MAIN feature)
+// takes Brett straight to the map with no TCP at all; TcpLink is the
+// door (off-wire download + today's testable path). USB and WiFi chips
+// are named now and honest about not being built yet.
 //
 // The DoorSocketFactory is INJECTED (constructor param, defaulting to
 // the stub): the real entrypoint supplies the platform socket; tests
 // supply fakes. This keeps dart:js_interop out of the VM test build
-// (the same stub-the-WebSocket lesson, applied at the shell).
+// (the same stub-the-WebSocket lesson, applied at the shell). The
+// BleTransportFactory is injected the same way - web/tests get the
+// honest refusing stub, the native build passes FbpBleTransport.new.
 
 import 'dart:async';
 
@@ -17,6 +21,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter/material.dart' hide Route;
 
+import 'ble_transport.dart';
 import 'codec.dart';
 import 'connect_screen.dart';
 import 'door_socket.dart';
@@ -29,7 +34,11 @@ import 'store.dart';
 
 class MeshtechApp extends StatefulWidget {
   final DoorSocketFactory socketFactory;
-  const MeshtechApp({super.key, this.socketFactory = _noSocket});
+  final BleTransportFactory bleFactory;
+  const MeshtechApp(
+      {super.key,
+      this.socketFactory = _noSocket,
+      this.bleFactory = _noBle});
 
   @override
   State<MeshtechApp> createState() => _MeshtechAppState();
@@ -40,12 +49,23 @@ class MeshtechApp extends StatefulWidget {
 DoorSocket _noSocket() => throw UnsupportedError(
     'no door socket wired for this entrypoint');
 
+/// The honest default: no BLE wired (web build, VM tests). The
+/// companion link reports it in plain words - never a fake scan.
+BleTransport _noBle() => throw UnsupportedError(
+    'no BLE transport wired for this entrypoint');
+
 class _MeshtechAppState extends State<MeshtechApp> {
   ConnectionSettings _settings = const ConnectionSettings();
   late final NodeStore _store;
-  late final LinkEvents _events;
+  late final LinkEvents _tcpEvents;
+  late final LinkEvents _airEvents;
   late TcpLink _tcpLink;
-  LinkState _linkState = LinkState.disabled;
+  late CompanionLink _airLink;
+  // TWO PIPES: each link reports its own state; the map is up when
+  // EITHER is live (Brett's answer 2026-09-25: the radio takes him to
+  // the map even with no TCP at all).
+  LinkState _tcpState = LinkState.disabled;
+  LinkState _airState = LinkState.disabled;
   String _linkDetail = '';
   final List<String> _log = [];
   String? _frameName;
@@ -60,6 +80,20 @@ class _MeshtechAppState extends State<MeshtechApp> {
   bool _wipeGate = true;
 
   bool _mounted = true; // link callbacks can outlive the widget tree
+
+  /// Either pipe live = the map is up (and the ConnectScreen steps
+  /// aside); connecting = at least one pipe is dialing.
+  LinkState get _linkState {
+    if (_tcpState == LinkState.connected ||
+        _airState == LinkState.connected) {
+      return LinkState.connected;
+    }
+    if (_tcpState == LinkState.connecting ||
+        _airState == LinkState.connecting) {
+      return LinkState.connecting;
+    }
+    return LinkState.disabled;
+  }
 
   /// The log lives in state; packets arriving from link callbacks
   /// append here (the map's log box reads it). THE DEVICE LOG
@@ -76,16 +110,26 @@ class _MeshtechAppState extends State<MeshtechApp> {
   void initState() {
     super.initState();
     _store = NodeStore();
-    _events = LinkEvents(
+    _tcpEvents = LinkEvents(
       onState: (s, d) => _safeSetState(() {
-        _linkState = s;
+        _tcpState = s;
         _linkDetail = d;
       }),
       onPacket: (packet, {heardMs}) => _onPacket(packet, heardMs),
       onLog: _logLine,
       onReset: () => _store.resetAll(),
     );
+    _airEvents = LinkEvents(
+      onState: (s, d) => _safeSetState(() {
+        _airState = s;
+        _linkDetail = d;
+      }),
+      onPacket: (packet, {heardMs}) => _onPacket(packet, heardMs),
+      onLog: _logLine,
+    );
     _tcpLink = _buildLink();
+    _airLink = CompanionLink(_airEvents,
+        transportFactory: widget.bleFactory);
     _bootstrap();
   }
 
@@ -98,7 +142,7 @@ class _MeshtechAppState extends State<MeshtechApp> {
   }
 
   TcpLink _buildLink() => TcpLink(
-        _events,
+        _tcpEvents,
         host: _settings.host,
         password: _settings.password,
         socketFactory: widget.socketFactory,
@@ -133,6 +177,9 @@ class _MeshtechAppState extends State<MeshtechApp> {
       _settings = loaded;
       _tcpLink = _buildLink();
     });
+    // NOTHING CONNECTS HERE (Brett 2026-09-25 - the selector's law):
+    // the app waits on the connect screen; only a pressed Connect
+    // (for the chosen chip) dials anything.
   }
 
   /// The store's law in action: packets land the moment they arrive;
@@ -200,9 +247,12 @@ class _MeshtechAppState extends State<MeshtechApp> {
   /// link from the saved settings, THEN dial - never a stale copy
   /// from app start. The ZIP's center arrives already resolved by
   /// the screen (it shows the lookup's honest error if it failed).
-  Future<void> _connect(String host, String password, int mapSizeKm,
-      String homeZip, (double, double)? homeCenter) async {
-    debugPrint('SHELL CONNECT host="$host"');
+  /// THE SELECTED CHIP DIALS (Brett 2026-09-25): `link` names which
+  /// chip was pressed - ONLY that link connects. USB and WiFi are in
+  /// the 4-way selector but not built yet: said plainly, never faked.
+  Future<void> _connect(String link, String host, String password,
+      int mapSizeKm, String homeZip, (double, double)? homeCenter) async {
+    debugPrint('SHELL CONNECT link="$link" host="$host"');
     final next = _settings.copyWith(
       host: host,
       password: password,
@@ -218,10 +268,23 @@ class _MeshtechAppState extends State<MeshtechApp> {
       _settings = next;
       _tcpLink = _buildLink();
     });
-    await _tcpLink.connect();
+    switch (link) {
+      case linkTcp:
+        await _tcpLink.connect();
+      case linkBle:
+        await _airLink.connect();
+      default:
+        // USB / WiFi: selectable, and honest about being un-built.
+        final name = link == linkUsb ? 'USB' : 'WiFi';
+        _logLine('$name link: not built yet - pick BLE or TCP');
+        _safeSetState(() => _linkDetail = '$name link: not built yet');
+    }
   }
 
-  void _disconnect() => _tcpLink.disconnect();
+  void _disconnect() {
+    _tcpLink.disconnect();
+    _airLink.disconnect();
+  }
 
   /// THE SIZE BUTTONS: stepping 20/40/60 redraws the SAME held data
   /// at the new window (rule 2) and persists the choice. It never
@@ -235,29 +298,47 @@ class _MeshtechAppState extends State<MeshtechApp> {
 
   /// THE UPDATE BUTTON: ask hilltop for the area data now - the same
   /// vectored ask the link sends by itself on connect (marker = what
-  /// the phone holds; the server's limiter decides, honestly).
-  void _ask() => _tcpLink.sendVectoredAsk(
-      syncMarker: _settings.syncMarker,
-      spanKm: _settings.mapSizeKm,
-      origin: _settings.origin);
+  /// the phone holds; the server's limiter decides, honestly). When
+  /// the radio is live the ask rides the AIR (DESIGN 2); otherwise
+  /// the door ferries it.
+  void _ask() {
+    if (_airState == LinkState.connected) {
+      _airLink.sendVectoredAsk(
+          syncMarker: _settings.syncMarker,
+          spanKm: _settings.mapSizeKm,
+          origin: _settings.origin);
+    } else {
+      _tcpLink.sendVectoredAsk(
+          syncMarker: _settings.syncMarker,
+          spanKm: _settings.mapSizeKm,
+          origin: _settings.origin);
+    }
+  }
 
   /// THE TAP-ASK (design section 10): tapping a node asks the server
   /// section it sits in - the answer's routes draw dot-to-dot. The
   /// section is computed from the node's REAL position on the
   /// server's frame (the wire's 3x3 - section ids are the server's
-  /// language), not the phone's 3x4 view grid.
+  /// language), not the phone's 3x4 view grid. Same pipe choice as
+  /// the Update ask: air when the radio is live, door otherwise.
   void _onDotTap(DotVM dot) {
     final section = _serverSectionOf(dot);
     if (section == 0) return; // outside every server section: honest no-op
     setState(() => _tappedPrefix = dot.prefix);
-    _tcpLink.sendSectionAsk(
-        sectionId: section, origin: _settings.origin);
+    if (_airState == LinkState.connected) {
+      _airLink.sendSectionAsk(
+          sectionId: section, origin: _settings.origin);
+    } else {
+      _tcpLink.sendSectionAsk(
+          sectionId: section, origin: _settings.origin);
+    }
   }
 
   /// Which server 3x3 section a position falls in - computed against
-  /// the heard LAYOUT (the same frame the wire uses for section ids).
+  /// the heard LAYOUT (whichever pipe heard it - the frame the wire
+  /// uses for section ids is the same on both).
   int _serverSectionOf(DotVM dot) {
-    final l = _tcpLink.layout;
+    final l = _airLink.layout ?? _tcpLink.layout;
     if (l == null) return 0;
     final frame = MapFrame(
         grid: l.grid,
@@ -272,6 +353,7 @@ class _MeshtechAppState extends State<MeshtechApp> {
     _mounted = false;
     _saveTimer?.cancel();
     _tcpLink.disconnect();
+    _airLink.disconnect();
     // A debug build leaves nothing behind on the way out: whatever
     // this session heard is wiped on flash too (fresh next launch).
     if (kDebugMode) {
@@ -312,6 +394,15 @@ class _MeshtechAppState extends State<MeshtechApp> {
 
   @override
   Widget build(BuildContext context) {
+    // Which pipe is live, named on the connection pill (one glance):
+    // both can be up at once (radio + door).
+    final airUp = _airState == LinkState.connected;
+    final tcpUp = _tcpState == LinkState.connected;
+    final linkLabel = airUp && tcpUp
+        ? 'Radio + TCP'
+        : airUp
+            ? 'Radio active'
+            : 'TCP active';
     return MaterialApp(
       title: 'meshtech',
       theme: _bluelineTheme(),
@@ -324,6 +415,7 @@ class _MeshtechAppState extends State<MeshtechApp> {
               pulse: _pulse,
               log: _log,
               linkDetail: _linkDetail,
+              linkLabel: linkLabel,
               onDisconnect: _disconnect,
               onAsk: _ask,
               onMapSizeChange: _changeMapSize,

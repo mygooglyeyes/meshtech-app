@@ -11,21 +11,28 @@
 //                  carrying `wire` hex of the SAME codec packets,
 //                  resume-after-hello, plain-words refusal acks,
 //                  NO auto-reconnect, silent-drop watchdog).
-//   CompanionLink- the BLE slot for Brett's Heltec (MeshCore
-//                  companion protocol). INERT until the hardware go:
-//                  it reports "no radio" rather than pretending.
+//   CompanionLink- the BLE link to Brett's Heltec (the MAIN
+//                  feature): scan -> connect -> protocol init ->
+//                  1s RX polling, ported from the VERIFIED
+//                  meshclient.ts. No radio = a plain-words refusal,
+//                  never a fake scan.
 //
 // Both feed the SAME decoded packets to the same callbacks - the link
-// is a transport, never a second decoder. The socket is injected
-// (DoorSocket): the native build passes IoDoorSocket.new, tests
-// pass a fake - the web app's stub-the-WebSocket lesson.
+// is a transport, never a second decoder. Both run intake through the
+// ONE WireFeed (the zero-dots law lives there, not here). The socket
+// is injected (DoorSocket): the native build passes IoDoorSocket.new,
+// tests pass a fake - the web app's stub-the-WebSocket lesson. The BLE
+// transport is injected the same way (BleTransportFactory).
 
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'ble_transport.dart';
 import 'codec.dart';
+import 'companion_protocol.dart';
 import 'door_socket.dart';
+import 'wire_feed.dart';
 
 enum LinkState { disabled, connecting, connected }
 
@@ -75,15 +82,18 @@ class TcpLink implements Link {
   // THE ZERO-DOTS LAW (the web app's lesson, re-learned on this
   // bench 2026-09-24): INTRO positions are DELTAS against the map
   // center - decoding them against (0,0) lands every dot ~10,000 km
-  // away. The server sends the LAYOUT first; the link remembers it
-  // and decodes every INTRO against it. An INTRO that arrives before
-  // any LAYOUT is HELD (loudly), never silently mis-placed.
-  Layout? _layout;
+  // away. That law lives in WireFeed (shared with the companion link):
+  // the feed remembers the LAYOUT and holds any INTRO that arrives
+  // before one, loudly, never silently mis-placing it.
+  late final WireFeed _feed = WireFeed(
+      pipe: 'door',
+      onPacket: (packet, {heardMs}) =>
+          events.onPacket?.call(packet, heardMs: heardMs),
+      onLog: _log);
 
   /// The heard map geometry (the server's 3x3 frame): what section
   /// asks are computed against and what INTROs decode against.
-  Layout? get layout => _layout;
-  final List<Uint8List> _heldIntros = [];
+  Layout? get layout => _feed.layout;
 
   TcpLink(this.events,
       {required this.host,
@@ -175,8 +185,7 @@ class TcpLink implements Link {
         _lastSeq = 0;
         // The node restarted: its map geometry died with its RAM -
         // the old center is no longer the truth.
-        _layout = null;
-        _heldIntros.clear();
+        _feed.reset();
         events.onReset?.call();
       }
       _send({'type': 'resume', 'after_seq': _lastSeq});
@@ -203,43 +212,10 @@ class TcpLink implements Link {
           for (var i = 0; i + 1 < wire.length; i += 2)
             int.parse(wire.substring(i, i + 2), radix: 16),
         ];
-        final packetBytes = Uint8List.fromList(bytes);
-        if (peekDataType(packetBytes) == typeIntro) {
-          if (_layout == null) {
-            // Honest hold: no center yet, and a wrong center is the
-            // zero-dots bug wearing a disguise. The LAYOUT is always
-            // first in a burst, so this flushes within milliseconds.
-            _heldIntros.add(packetBytes);
-            _log('INTRO held - no map center heard yet');
-            return;
-          }
-          final intro = decodeIntro(packetBytes.sublist(3),
-              centerLat: _layout!.centerLat,
-              centerLon: _layout!.centerLon);
-          events.onPacket?.call(intro,
-              heardMs: DateTime.now().millisecondsSinceEpoch);
-          return;
-        }
-        final packet = decodeAny(packetBytes);
-        // THE HONEST RECEIPT (Brett, 2026-09-24): every packet the
-        // phone receives is logged with its type and the pipe it
-        // came in on - no silent data, no guessed pipes.
-        _log('door <- ${_packetName(packet)}');
-        if (packet is Layout) {
-          _layout = packet;
-          // Flush anything held while the center was unknown.
-          final held = List<Uint8List>.from(_heldIntros);
-          _heldIntros.clear();
-          for (final b in held) {
-            final intro = decodeIntro(b.sublist(3),
-                centerLat: _layout!.centerLat,
-                centerLon: _layout!.centerLon);
-            events.onPacket?.call(intro,
-                heardMs: DateTime.now().millisecondsSinceEpoch);
-          }
-        }
-        events.onPacket?.call(packet,
-            heardMs: DateTime.now().millisecondsSinceEpoch);
+        // THE ZERO-DOTS LAW + THE HONEST RECEIPT ("door <- <packet>")
+        // live in WireFeed now - the same intake path the companion
+        // link uses, with 'door' as the pipe name.
+        _feed.feed(Uint8List.fromList(bytes));
       } catch (err) {
         _log('decode failed: $err');
       }
@@ -343,17 +319,6 @@ class TcpLink implements Link {
 
   void _send(Map<String, Object?> obj) => _socket?.send(jsonEncode(obj));
 
-  /// The packet's plain name for the receipt log.
-  static String _packetName(Object p) => switch (p) {
-        Layout() => 'layout (map frame)',
-        Intro i => 'intro (${i.entries.length} node(s))',
-        Pulse() => 'pulse (feed health)',
-        SectSum s => 'section ${s.sectionId} summary',
-        Route r => 'route ${r.routeId} (${r.prefixes.length} hop(s))',
-        Gone g => 'gone (${g.prefixes.length} node(s))',
-        _ => 'packet',
-      };
-
   void _startWatchdog() {
     _stopWatchdog();
     _watchdog = Timer.periodic(
@@ -374,34 +339,155 @@ class TcpLink implements Link {
 }
 
 // ---------------------------------------------------------------------------
-// CompanionLink - the MAIN feature's slot (inert until the hardware go)
+// CompanionLink - the MAIN feature (DESIGN.md section 2): BLE to
+// Brett's Heltec, the phone's radio (ears AND voice). Ported from the
+// VERIFIED meshclient.ts over the BleTransport seam: the native build
+// passes FbpBleTransport.new, tests pass a fake - the DoorSocket
+// lesson applied to Bluetooth. Intake runs through the SAME WireFeed
+// as the door's ('air' pipe), so packets land in the store through
+// the one decoder path.
 // ---------------------------------------------------------------------------
 
 class CompanionLink implements Link {
   final LinkEvents events;
-  LinkState _state = LinkState.disabled;
+  final BleTransportFactory transportFactory;
 
-  CompanionLink(this.events);
+  // Timing knobs (the proven defaults; tests shorten them).
+  final Duration pollInterval;
+  final Duration slotProbeGap;
+  final Duration probeSummaryDelay;
+
+  LinkState _state = LinkState.disabled;
+  bool _wantRun = false;
+  BleTransport? _transport;
+  CompanionProtocol? _proto;
+  late final WireFeed _feed = WireFeed(
+      pipe: 'air',
+      onPacket: (packet, {heardMs}) =>
+          events.onPacket?.call(packet, heardMs: heardMs),
+      onLog: _log);
+
+  CompanionLink(this.events,
+      {required this.transportFactory,
+      this.pollInterval = const Duration(seconds: 1),
+      this.slotProbeGap = const Duration(milliseconds: 120),
+      this.probeSummaryDelay = const Duration(milliseconds: 1400)});
 
   @override
   LinkState get state => _state;
 
+  /// The heard map geometry - the same zero-dots law as the door's
+  /// (section asks computed against whatever frame either pipe heard).
+  Layout? get layout => _feed.layout;
+
+  void _setState(LinkState s, [String detail = '']) {
+    _state = s;
+    events.onState?.call(s, detail);
+  }
+
+  void _log(String line) => events.onLog?.call(line);
+
   @override
   Future<void> connect() async {
-    // HONEST UNTIL THE HARDWARE GO (design law: never a fake read):
-    // BLE to the Heltec companion is designed (section 2) but not
-    // built - the radio is not flashed, TX is not on. The app says so
-    // plainly instead of pretending to scan.
-    _state = LinkState.disabled;
-    events.onState?.call(LinkState.disabled,
-        'companion radio not connected - no BLE device paired yet');
-    events.onLog?.call(
-        'companion link: waiting for the radio (stage 2 hardware)');
+    _wantRun = true;
+    _setState(LinkState.connecting, 'scanning for the radio');
+    _log('companion: scanning for the radio (BLE)');
+    try {
+      // The factory INSIDE the try: an unwired BLE (web, tests) or a
+      // missing radio must refuse in plain words, never hang the app
+      // on Connecting (the bench lesson from TcpLink, applied here).
+      final transport = transportFactory();
+      transport.onDisconnect = (why) {
+        if (!_wantRun) return; // we dropped it on purpose
+        _wantRun = false;
+        _log('companion link: $why');
+        unawaited(_teardown());
+        _setState(LinkState.disabled, why);
+      };
+      await transport.connect();
+      if (!_wantRun) {
+        await transport.close();
+        return;
+      }
+      _transport = transport;
+      _proto = CompanionProtocol(
+        transport: transport,
+        // Reassembled scope plaintexts are FULL packets (envelope
+        // intact) - straight into the shared feed.
+        onPayload: (plaintext) => _feed.feed(plaintext),
+        onLog: _log,
+        pollInterval: pollInterval,
+        slotProbeGap: slotProbeGap,
+        probeSummaryDelay: probeSummaryDelay,
+      );
+      await _proto!.start();
+      _setState(LinkState.connected, transport.name);
+      _log('companion connected: ${transport.name} - receiving on the'
+          ' air pipe');
+    } catch (err) {
+      _wantRun = false;
+      await _teardown();
+      _setState(LinkState.disabled, 'no radio: $err');
+      _log('companion: $err');
+    }
   }
 
   @override
   void disconnect() {
-    _state = LinkState.disabled;
-    events.onState?.call(LinkState.disabled, '');
+    _wantRun = false;
+    unawaited(_teardown());
+    _setState(LinkState.disabled);
+  }
+
+  Future<void> _teardown() async {
+    final proto = _proto;
+    _proto = null;
+    await proto?.stop();
+    final transport = _transport;
+    _transport = null;
+    await transport?.close();
+  }
+
+  /// THE AIR ASK (DESIGN.md 2): the same vectored REFRESH_REQ the
+  /// door ferries, wrapped for the #scope channel so hilltop can
+  /// answer over the air. Same codec bytes, different pipe.
+  Future<void> sendVectoredAsk(
+      {required int syncMarker, required int spanKm, int origin = 0}) {
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final req = RefreshReq(
+      seq: nowMs & 0xFFFF,
+      kind: refreshKindSection,
+      target: refreshWholeArea,
+      nonce: (nowMs >> 4) & 0xFFFF,
+      origin: origin,
+      spanKm: spanKm,
+      syncMarker: syncMarker,
+    );
+    return _sendScope(encodeRefreshReq(req), 'ask-${req.seq}');
+  }
+
+  /// The tap-ask over the air (design section 10): a section ask,
+  /// same bytes the door carries.
+  Future<void> sendSectionAsk(
+      {required int sectionId, required int origin}) {
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final req = RefreshReq(
+      seq: nowMs & 0xFFFF,
+      kind: refreshKindSection,
+      target: sectionId,
+      nonce: (nowMs >> 4) & 0xFFFF,
+      origin: origin,
+    );
+    return _sendScope(
+        encodeRefreshReq(req), 'sec-${req.seq}-$sectionId');
+  }
+
+  Future<void> _sendScope(Uint8List wire, String id) async {
+    final proto = _proto;
+    if (proto == null || _state != LinkState.connected) {
+      _log('$id not sent - the companion link is down');
+      return;
+    }
+    await proto.sendScope(wire);
   }
 }

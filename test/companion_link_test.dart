@@ -1,0 +1,325 @@
+// The BLE companion link, tested on the VM through the BleTransport
+// seam (the DoorSocket lesson applied to Bluetooth): a fake radio
+// feeds the VERIFIED meshclient.ts frame shapes at CompanionLink, and
+// packets must land exactly like the door's - honest receipts ('air
+// <- ...'), the zero-dots law (INTRO held until the LAYOUT names the
+// center), the #scope probe, and a TX path that reports its fate.
+
+import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:crypto/crypto.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:meshtech_app/ble_transport.dart';
+import 'package:meshtech_app/codec.dart';
+import 'package:meshtech_app/companion_protocol.dart';
+import 'package:meshtech_app/link.dart';
+
+class FakeBleTransport implements BleTransport {
+  final _incoming = StreamController<Uint8List>.broadcast();
+  final writes = <Uint8List>[];
+  void Function(String why)? onDisconnectFn;
+  bool closed = false;
+
+  @override
+  Stream<Uint8List> get incoming => _incoming.stream;
+
+  @override
+  set onDisconnect(void Function(String why) f) => onDisconnectFn = f;
+
+  @override
+  String get name => 'FakeHeltec';
+
+  @override
+  Future<void> connect() async {}
+
+  @override
+  Future<void> write(Uint8List data) async {
+    writes.add(Uint8List.fromList(data));
+  }
+
+  @override
+  Future<void> close() async {
+    closed = true;
+    await _incoming.close();
+  }
+
+  void emit(List<int> bytes) => _incoming.add(Uint8List.fromList(bytes));
+}
+
+// The golden wire bytes the codec tests pin (same vectors the door
+// link is verified against): a LAYOUT centred at (1.2345, -1.5) with
+// span 40000 m, and an INTRO whose positioned entry carries deltas
+// 36/36 against that span.
+const layoutWire =
+    '0553150503007eb10344d61200a01ce9ff409c0464656d6f';
+const introWire =
+    '04531e0502007eb1409c0211030748696c6c746f7024002400220105416c696365';
+
+Uint8List bytesOf(String hex) => Uint8List.fromList([
+      for (var i = 0; i + 1 < hex.length; i += 2)
+        int.parse(hex.substring(i, i + 2), radix: 16),
+    ]);
+
+/// A CHANNEL_DATA_RECV (0x1B) response wrapped around a FULL scope
+/// plaintext - the exact envelope the firmware queues for
+/// CMD_SYNC_NEXT_MESSAGE (meshclient.ts: code+snr+rsv+chan+path_len+
+/// data_type(2)+data_len+body).
+Uint8List channelDataRecv(String wireHex, {int snrRaw = 48}) {
+  final wire = bytesOf(wireHex);
+  final body = wire.sublist(3);
+  final out = Uint8List(9 + body.length);
+  out[0] = 0x1b; // RESPONSE_CHANNEL_DATA_RECV
+  out[1] = snrRaw; // signed 8-bit / 4 -> 48 = 12.0 dB
+  out[4] = 1; // channel idx
+  out[5] = 0; // path_len
+  out[6] = wire[0]; // data_type LE lo
+  out[7] = wire[1]; // data_type LE hi
+  out[8] = body.length;
+  out.setAll(9, body);
+  return out;
+}
+
+/// A CHANNEL_INFO (0x12) response: idx(1) name(32) secret(16).
+Uint8List channelInfo(int slot, String name, List<int> secret) {
+  final out = Uint8List(50);
+  out[0] = 0x12;
+  out[1] = slot;
+  out.setAll(2, utf8.encode(name));
+  out.setAll(34, secret);
+  return out;
+}
+
+List<int> scopeSecret() =>
+    sha256.convert(utf8.encode('#scope')).bytes.sublist(0, 16);
+
+void main() {
+  // Short timings: the proven defaults (1 s poll, 8x120 ms probe) are
+  // slow for a test's event loop.
+  CompanionLink buildLink(LinkEvents events, FakeBleTransport fake) =>
+      CompanionLink(
+        events,
+        transportFactory: () => fake,
+        pollInterval: const Duration(milliseconds: 30),
+        slotProbeGap: const Duration(milliseconds: 5),
+        probeSummaryDelay: const Duration(milliseconds: 60),
+      );
+
+  test('connect runs the proven init: APP_START, device query, poll',
+      () async {
+    final fake = FakeBleTransport();
+    final logs = <String>[];
+    final link = buildLink(LinkEvents(onLog: logs.add), fake);
+
+    await link.connect();
+    expect(link.state, LinkState.connected);
+
+    // FIRST after connect: CMD_APP_START with the app name at offset 8
+    // (7 reserved bytes follow the command byte).
+    final appStart = fake.writes[0];
+    expect(appStart[0], 0x01);
+    expect(utf8.decode(appStart.sublist(8)), 'meshtech-app');
+    // Then the device query (0x16 0x03).
+    expect(fake.writes[1], equals([0x16, 0x03]));
+    expect(logs.any((l) => l.contains('companion init sent')), isTrue);
+    expect(logs.any((l) => l.contains('channel probe sent')), isTrue);
+
+    // RX polling: a bare CMD_SYNC_NEXT_MESSAGE (0x0A) goes out on the
+    // timer - the 2026-09-18 lesson (a passive listener sees nothing).
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    expect(
+        fake.writes.any((w) => w.length == 1 && w[0] == 0x0a), isTrue);
+
+    link.disconnect();
+    expect(link.state, LinkState.disabled);
+    // The teardown (stop polling, close the transport) is async.
+    await Future<void>.delayed(Duration.zero);
+    expect(fake.closed, isTrue);
+  });
+
+  test('an OTA scope packet lands as a receipt on the air pipe',
+      () async {
+    final fake = FakeBleTransport();
+    final received = <Object>[];
+    final logs = <String>[];
+    final link = buildLink(
+        LinkEvents(onPacket: (p, {heardMs}) => received.add(p),
+            onLog: logs.add),
+        fake);
+    await link.connect();
+
+    fake.emit(channelDataRecv(layoutWire));
+    await Future<void>.delayed(Duration.zero);
+
+    expect(received.whereType<Layout>(), hasLength(1));
+    // THE HONEST RECEIPT names the pipe: air, not door.
+    expect(logs.any((l) => l.startsWith('air <- layout')), isTrue);
+    // The first OTA packet announces itself with its SNR (12.0 dB).
+    expect(
+        logs.any((l) => l.contains('first OTA packet heard') &&
+            l.contains('12.0 dB')),
+        isTrue);
+
+    link.disconnect();
+  });
+
+  test('zero-dots law over the air: INTRO held, flushed by the LAYOUT',
+      () async {
+    final fake = FakeBleTransport();
+    final received = <Object>[];
+    final logs = <String>[];
+    final link = buildLink(
+        LinkEvents(onPacket: (p, {heardMs}) => received.add(p),
+            onLog: logs.add),
+        fake);
+    await link.connect();
+
+    // INTRO FIRST - no map center heard yet: held, loudly.
+    fake.emit(channelDataRecv(introWire));
+    await Future<void>.delayed(Duration.zero);
+    expect(received.whereType<Intro>(), isEmpty);
+    expect(logs.any((l) => l.contains('INTRO held')), isTrue);
+
+    // The LAYOUT names the center: the held INTRO flushes decoded
+    // against it (36 deltas of a 40000 m span off (1.2345, -1.5)).
+    fake.emit(channelDataRecv(layoutWire));
+    await Future<void>.delayed(Duration.zero);
+    final intro = received.whereType<Intro>().single;
+    final stepDeg = 36 / 32767.0 * (40000.0 / 111320.0);
+    expect(intro.entries.first.lat!, closeTo(1.2345 + stepDeg, 1e-9));
+    expect(intro.entries.first.lon!, closeTo(-1.5 + stepDeg, 1e-9));
+    expect(received.whereType<Layout>(), hasLength(1));
+
+    link.disconnect();
+  });
+
+  test('#scope probe finds the slot and verifies the secret', () async {
+    final fake = FakeBleTransport();
+    final logs = <String>[];
+    final link = buildLink(LinkEvents(onLog: logs.add), fake);
+    await link.connect();
+
+    fake.emit(channelInfo(3, '#scope', scopeSecret()));
+    await Future<void>.delayed(Duration.zero);
+    expect(
+        logs.contains(
+            '#scope found in radio slot 3 - secret MATCHES #scope'),
+        isTrue);
+
+    link.disconnect();
+  });
+
+  test('a wrong secret is reported as a mismatch, never trusted',
+      () async {
+    final fake = FakeBleTransport();
+    final logs = <String>[];
+    final link = buildLink(LinkEvents(onLog: logs.add), fake);
+    await link.connect();
+
+    fake.emit(channelInfo(1, 'scope', List<int>.filled(16, 0xAB)));
+    await Future<void>.delayed(Duration.zero);
+    expect(
+        logs.any((l) =>
+            l.contains('slot 1') && l.contains('MISMATCHES #scope')),
+        isTrue);
+
+    link.disconnect();
+  });
+
+  test('the probe sweep reports slots when no #scope shows up',
+      () async {
+    final fake = FakeBleTransport();
+    final logs = <String>[];
+    final link = buildLink(LinkEvents(onLog: logs.add), fake);
+    await link.connect();
+
+    fake.emit(channelInfo(0, 'chat', scopeSecret()));
+    await Future<void>.delayed(const Duration(milliseconds: 90));
+    expect(
+        logs.any((l) =>
+            l.contains('no #scope among them') && l.contains("0:'chat'")),
+        isTrue);
+
+    link.disconnect();
+  });
+
+  test('an uplink refuses honestly until the slot is known', () async {
+    final fake = FakeBleTransport();
+    final logs = <String>[];
+    final link = buildLink(LinkEvents(onLog: logs.add), fake);
+    await link.connect();
+
+    await link.sendVectoredAsk(syncMarker: 0, spanKm: 40, origin: 1);
+    expect(logs.any((l) => l.contains('#scope slot not found yet')), isTrue);
+    // NOT one CMD_SEND_CHANNEL_DATA byte on the wire (polls may have
+    // ticked meanwhile - the uplink itself must be absent).
+    expect(
+        fake.writes.any((w) => w.isNotEmpty && w[0] == cmdSendChannelData),
+        isFalse);
+
+    link.disconnect();
+  });
+
+  test('the scope uplink wraps REFRESH_REQ for the radio, and the OK '
+      'verdict prints', () async {
+    final fake = FakeBleTransport();
+    final logs = <String>[];
+    final link = buildLink(LinkEvents(onLog: logs.add), fake);
+    await link.connect();
+    fake.emit(channelInfo(2, 'scope', scopeSecret()));
+    await Future<void>.delayed(Duration.zero);
+
+    await link.sendVectoredAsk(syncMarker: 7, spanKm: 40, origin: 0x1234);
+    final uplink = fake.writes.last;
+    // [62][slot][0xFF flood] + the REFRESH_REQ body - the 3-byte
+    // envelope is STRIPPED (the radio adds its own; carrying it
+    // double-wraps the packet and the host drops it silently).
+    expect(uplink[0], cmdSendChannelData);
+    expect(uplink[1], 2); // the discovered slot
+    expect(uplink[2], 0xff);
+    expect(uplink.length, greaterThan(3));
+    expect(logs.any((l) => l.contains('scope uplink sent') &&
+        l.contains('slot 2')), isTrue);
+
+    // The radio's verdict lands as a bare OK - never invisible.
+    fake.emit([0x00]);
+    await Future<void>.delayed(Duration.zero);
+    expect(
+        logs.any((l) => l.contains('uplink ACCEPTED by radio')), isTrue);
+
+    link.disconnect();
+  });
+
+  test('the radio dropping mid-session is reported in plain words',
+      () async {
+    final fake = FakeBleTransport();
+    final logs = <String>[];
+    final states = <LinkState>[];
+    final link = buildLink(
+        LinkEvents(onState: (s, d) => states.add(s), onLog: logs.add),
+        fake);
+    await link.connect();
+    expect(states, [LinkState.connecting, LinkState.connected]);
+
+    fake.onDisconnectFn!('radio disconnected');
+    await Future<void>.delayed(Duration.zero);
+    expect(link.state, LinkState.disabled);
+    expect(logs.any((l) => l.contains('radio disconnected')), isTrue);
+    expect(fake.closed, isTrue);
+  });
+
+  test('no BLE wired refuses in plain words - never a fake scan',
+      () async {
+    final logs = <String>[];
+    final states = <LinkState>[];
+    final link = CompanionLink(
+      LinkEvents(onState: (s, d) => states.add(s), onLog: logs.add),
+      transportFactory: () =>
+          throw UnsupportedError('no BLE transport wired'),
+    );
+    await link.connect();
+    expect(link.state, LinkState.disabled);
+    expect(logs.any((l) => l.contains('no BLE transport wired')), isTrue);
+  });
+}
