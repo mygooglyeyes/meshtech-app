@@ -22,6 +22,19 @@ class FakeBleTransport implements BleTransport {
   void Function(String why)? onDisconnectFn;
   bool closed = false;
 
+  /// What scan() hears (tests override) and who got connected.
+  List<BleCandidate> scanResults = const [
+    BleCandidate('fake-1', 'FakeHeltec')
+  ];
+  BleCandidate? connectedTo;
+
+  /// The pairing bounce: fail the next N connect() calls the way the
+  /// real stack does ('Device is disconnected'), optionally firing
+  /// the stale drop event first (what the bench saw).
+  int failConnects = 0;
+  int connectCalls = 0;
+  bool fireDisconnectOnFail = false;
+
   @override
   Stream<Uint8List> get incoming => _incoming.stream;
 
@@ -32,7 +45,19 @@ class FakeBleTransport implements BleTransport {
   String get name => 'FakeHeltec';
 
   @override
-  Future<void> connect() async {}
+  Future<List<BleCandidate>> scan(
+          {Duration timeout = const Duration(seconds: 5)}) async =>
+      scanResults;
+
+  @override
+  Future<void> connect(BleCandidate pick) async {
+    connectCalls++;
+    if (connectCalls <= failConnects) {
+      if (fireDisconnectOnFail) onDisconnectFn?.call('radio disconnected');
+      throw StateError('Device is disconnected');
+    }
+    connectedTo = pick;
+  }
 
   @override
   Future<void> write(Uint8List data) async {
@@ -104,6 +129,7 @@ void main() {
         pollInterval: const Duration(milliseconds: 30),
         slotProbeGap: const Duration(milliseconds: 5),
         probeSummaryDelay: const Duration(milliseconds: 60),
+        retryPause: const Duration(milliseconds: 10),
       );
 
   test('connect runs the proven init: APP_START, device query, poll',
@@ -307,6 +333,106 @@ void main() {
     expect(link.state, LinkState.disabled);
     expect(logs.any((l) => l.contains('radio disconnected')), isTrue);
     expect(fake.closed, isTrue);
+  });
+
+  test("the picker's choice is the radio that gets connected", () async {
+    final fake = FakeBleTransport()
+      ..scanResults = const [
+        BleCandidate('id-a', 'Heltec-A'),
+        BleCandidate('id-b', 'Heltec-B'),
+      ];
+    final link = CompanionLink(
+      LinkEvents(onLog: (_) {}),
+      transportFactory: () => fake,
+      // The human taps the SECOND radio in the box.
+      devicePicker: (found) async => found.last.id,
+      pollInterval: const Duration(milliseconds: 30),
+      slotProbeGap: const Duration(milliseconds: 5),
+      probeSummaryDelay: const Duration(milliseconds: 60),
+    );
+    await link.connect();
+    expect(link.state, LinkState.connected);
+    expect(fake.connectedTo?.id, 'id-b');
+    link.disconnect();
+    await Future<void>.delayed(Duration.zero);
+  });
+
+  test('cancelling the picker connects NOTHING - honestly', () async {
+    final fake = FakeBleTransport();
+    final logs = <String>[];
+    final link = CompanionLink(
+      LinkEvents(onLog: logs.add),
+      transportFactory: () => fake,
+      devicePicker: (found) async => null, // dismissed the box
+      pollInterval: const Duration(milliseconds: 30),
+      slotProbeGap: const Duration(milliseconds: 5),
+      probeSummaryDelay: const Duration(milliseconds: 60),
+    );
+    await link.connect();
+    expect(link.state, LinkState.disabled);
+    expect(fake.connectedTo, isNull);
+    expect(logs.any((l) => l.contains('radio selection cancelled')), isTrue);
+    await Future<void>.delayed(Duration.zero);
+    expect(fake.closed, isTrue);
+  });
+
+  test('an empty scan refuses in plain words - the box never opens',
+      () async {
+    final fake = FakeBleTransport()..scanResults = const [];
+    final logs = <String>[];
+    final link = CompanionLink(
+      LinkEvents(onLog: logs.add),
+      transportFactory: () => fake,
+      devicePicker: (found) async =>
+          fail('the picker must not run on an empty scan'),
+      pollInterval: const Duration(milliseconds: 30),
+      slotProbeGap: const Duration(milliseconds: 5),
+      probeSummaryDelay: const Duration(milliseconds: 60),
+    );
+    await link.connect();
+    expect(link.state, LinkState.disabled);
+    expect(
+        logs.any((l) => l.contains('no companion radio found nearby')),
+        isTrue);
+    expect(fake.connectedTo, isNull);
+  });
+
+  test('the pairing bounce is retried by the app itself - one press',
+      () async {
+    final fake = FakeBleTransport()..failConnects = 1;
+    final logs = <String>[];
+    final link = buildLink(LinkEvents(onLog: logs.add), fake);
+    await link.connect();
+    expect(link.state, LinkState.connected);
+    expect(fake.connectCalls, 2); // died once, the app retried
+    expect(logs.any((l) => l.contains('retry')), isTrue);
+    link.disconnect();
+    await Future<void>.delayed(Duration.zero);
+  });
+
+  test('a stale drop event inside the retry window is ignored', () async {
+    final fake = FakeBleTransport()
+      ..failConnects = 1
+      ..fireDisconnectOnFail = true;
+    final logs = <String>[];
+    final link = buildLink(LinkEvents(onLog: logs.add), fake);
+    await link.connect();
+    expect(link.state, LinkState.connected);
+    expect(logs.any((l) => l.contains('radio disconnected')), isFalse);
+    link.disconnect();
+    await Future<void>.delayed(Duration.zero);
+  });
+
+  test('three bounces in a row end honestly - disabled, not hung',
+      () async {
+    final fake = FakeBleTransport()..failConnects = 99;
+    final logs = <String>[];
+    final link = buildLink(LinkEvents(onLog: logs.add), fake);
+    await link.connect();
+    expect(link.state, LinkState.disabled);
+    expect(fake.connectCalls, 3); // tried exactly three times
+    expect(logs.any((l) => l.contains('retry')), isTrue);
+    expect(logs.any((l) => l.contains('Device is disconnected')), isTrue);
   });
 
   test('no BLE wired refuses in plain words - never a fake scan',

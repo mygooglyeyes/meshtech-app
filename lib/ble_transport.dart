@@ -6,6 +6,14 @@
 
 import 'dart:typed_data';
 
+/// One radio found by a scan: what the human sees (name) and what
+/// the link needs to dial it (id - the platform's remote id).
+class BleCandidate {
+  final String id;
+  final String name;
+  const BleCandidate(this.id, this.name);
+}
+
 /// One BLE link to a companion radio (Nordic UART service).
 abstract class BleTransport {
   /// Raw notifications from the radio (one notification = one call;
@@ -18,9 +26,16 @@ abstract class BleTransport {
   /// The radio's advertised name ("" until connected).
   String get name;
 
-  /// Scan for the companion, connect, discover, subscribe.
-  /// Throws plain words on failure ("no companion radio found").
-  Future<void> connect();
+  /// Scan for companions advertising the UART service. Returns every
+  /// candidate heard within [timeout] (empty list = none nearby - the
+  /// caller reports it in plain words, never a fake connect).
+  Future<List<BleCandidate>> scan(
+      {Duration timeout = const Duration(seconds: 5)});
+
+  /// Connect to ONE candidate the caller chose from scan() - the
+  /// picker's pick (Brett 2026-09-25: a box lists them, he selects).
+  /// Throws plain words (BleRefusal) on failure.
+  Future<void> connect(BleCandidate pick);
 
   /// One command frame to the radio (the companion protocol's bare
   /// [type][data] shape - NO length prefix, per the live-link lesson).

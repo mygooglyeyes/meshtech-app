@@ -30,6 +30,7 @@ class FbpBleTransport implements BleTransport {
   final _incoming = StreamController<Uint8List>.broadcast();
   void Function(String why)? _onDisconnect;
   BluetoothDevice? _device;
+  final Map<String, BluetoothDevice> _nearby = {}; // scan results by id
   BluetoothCharacteristic? _rxChar;
   StreamSubscription<List<int>>? _notifySub;
   StreamSubscription<BluetoothConnectionState>? _connSub;
@@ -45,7 +46,8 @@ class FbpBleTransport implements BleTransport {
   String get name => _name;
 
   @override
-  Future<void> connect() async {
+  Future<List<BleCandidate>> scan(
+      {Duration timeout = const Duration(seconds: 5)}) async {
     try {
       if (!await FlutterBluePlus.isSupported) {
         throw const BleRefusal('this device has no Bluetooth');
@@ -54,35 +56,80 @@ class FbpBleTransport implements BleTransport {
       if (adapter != BluetoothAdapterState.on) {
         throw const BleRefusal('Bluetooth is off - turn it on first');
       }
-      // Scan for the companion (filtered to the Nordic UART service
-      // it advertises). Nothing found in 10 s = plain words.
-      FlutterBluePlus.startScan(
-          withServices: [_uartService],
-          timeout: const Duration(seconds: 10));
-      BluetoothDevice device;
+      // Scan the Nordic-UART service only. The first scan also pops
+      // Android's Nearby-devices permission box (once per install) -
+      // so wait for scanning to actually START (the grant) before
+      // counting the collection window; a never-started scan means
+      // the permission was not granted, and says so.
+      final found = <String, BleCandidate>{};
+      _nearby.clear();
+      final sub = FlutterBluePlus.scanResults.listen((batch) {
+        for (final r in batch) {
+          final id = r.device.remoteId.str;
+          final name = r.device.platformName.isEmpty
+              ? 'unnamed radio'
+              : r.device.platformName;
+          found[id] = BleCandidate(id, name);
+          _nearby[id] = r.device;
+        }
+      });
       try {
-        final batch = await FlutterBluePlus.scanResults
-            .firstWhere((results) => results.isNotEmpty)
-            .timeout(const Duration(seconds: 10));
-        device = batch.first.device;
-      } on TimeoutException {
-        throw const BleRefusal('no companion radio found nearby');
+        FlutterBluePlus.startScan(
+                withServices: [_uartService], timeout: timeout)
+            .catchError((_) {}); // failure shows up as an empty list
+        try {
+          await FlutterBluePlus.isScanning
+              .where((s) => s)
+              .first
+              .timeout(timeout);
+        } on TimeoutException {
+          throw const BleRefusal(
+              'Bluetooth permission not granted - allow Nearby devices, then Connect again');
+        }
+        await Future<void>.delayed(timeout);
       } finally {
         await FlutterBluePlus.stopScan();
+        await sub.cancel();
+      }
+      return found.values.toList(growable: false);
+    } catch (err) {
+      if (err is BleRefusal) rethrow;
+      throw BleRefusal('scan failed: $err');
+    }
+  }
+
+  @override
+  Future<void> connect(BleCandidate pick) async {
+    try {
+      // IDEMPOTENT (the pairing-bounce retry): a retry can arrive
+      // while listeners from a half-open attempt are still wired -
+      // cancel them first or notifications double-fire.
+      await _notifySub?.cancel();
+      _notifySub = null;
+      await _connSub?.cancel();
+      _connSub = null;
+      final device = _nearby[pick.id];
+      if (device == null) {
+        throw const BleRefusal('that radio is no longer nearby - scan again');
       }
       // The library demands a license declaration at connect
       // (flutter_blue_plus 2.3.x). Brett's pick 2026-09-25:
       // nonprofit (the free tier - personal/nonprofit/education).
       // connect also negotiates a 512-byte MTU by itself (frames run
       // up to ~172 B; the default 23 truncates writes).
+      //
+      // PATIENT THROUGH THE PAIRING BOX (Brett's bench 2026-09-25):
+      // a brand-new association pops Android's PIN dialog, which
+      // waits for a HUMAN to type - our old 10 s timeout aborted
+      // mid-entry ("seemed to fail"). A minute gives the PIN box
+      // room; the retry helper below does the same for the steps
+      // that follow, which block while the pairing runs.
       await device.connect(
           license: License.nonprofit,
-          timeout: const Duration(seconds: 10));
+          timeout: const Duration(seconds: 60));
       _device = device;
-      _name = device.platformName.isEmpty
-          ? 'companion radio'
-          : device.platformName;
-      final services = await device.discoverServices();
+      _name = pick.name;
+      final services = await _patient(() => device.discoverServices());
       BluetoothService? uart;
       for (final s in services) {
         if (s.uuid == _uartService) uart = s;
@@ -98,8 +145,9 @@ class FbpBleTransport implements BleTransport {
       if (tx == null || rx == null) {
         throw const BleRefusal('UART service is missing its channels');
       }
+      final notifier = tx; // final for the closure (tx is nullable)
       _rxChar = rx;
-      await tx.setNotifyValue(true);
+      await _patient(() => notifier.setNotifyValue(true));
       _notifySub = tx.onValueReceived.listen(
         (data) => _incoming.add(Uint8List.fromList(data)),
         onError: (_) => _notifySub?.cancel(),
@@ -126,6 +174,32 @@ class FbpBleTransport implements BleTransport {
     // With response - the companion's proven command path (the web
     // client's characteristic.writeValue).
     await rx.write(data);
+  }
+
+  /// Patient through the pairing box: steps that follow a connect
+  /// can block or refuse while Android's PIN dialog waits for a
+  /// human (bench 2026-09-25). Retry until [window] runs out instead
+  /// of failing on the first refusal - then say so in plain words,
+  /// naming the PIN box as the likely suspect.
+  Future<T> _patient<T>(
+    Future<T> Function() op, {
+    Duration window = const Duration(seconds: 60),
+    Duration pause = const Duration(milliseconds: 500),
+  }) async {
+    final deadline = DateTime.now().add(window);
+    while (true) {
+      try {
+        return await op();
+      } catch (err) {
+        if (err is BleRefusal || DateTime.now().isAfter(deadline)) {
+          if (err is BleRefusal) rethrow;
+          throw BleRefusal(
+              'radio did not finish coming up: $err - if a PIN box'
+              ' appeared, enter the PIN and press Connect again');
+        }
+        await Future<void>.delayed(pause);
+      }
+    }
   }
 
   @override

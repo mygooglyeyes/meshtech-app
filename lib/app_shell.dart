@@ -79,6 +79,10 @@ class _MeshtechAppState extends State<MeshtechApp> {
   // whatever the store held) is blocked until then.
   bool _wipeGate = true;
 
+  /// The app's navigator (the picker dialog needs a context BELOW
+  /// the MaterialApp - this state sits above it).
+  final GlobalKey<NavigatorState> _navKey = GlobalKey<NavigatorState>();
+
   bool _mounted = true; // link callbacks can outlive the widget tree
 
   /// Either pipe live = the map is up (and the ConnectScreen steps
@@ -129,7 +133,8 @@ class _MeshtechAppState extends State<MeshtechApp> {
     );
     _tcpLink = _buildLink();
     _airLink = CompanionLink(_airEvents,
-        transportFactory: widget.bleFactory);
+        transportFactory: widget.bleFactory,
+        devicePicker: _pickRadio);
     _bootstrap();
   }
 
@@ -139,6 +144,35 @@ class _MeshtechAppState extends State<MeshtechApp> {
   void _safeSetState(VoidCallback fn) {
     if (!_mounted) return;
     setState(fn);
+  }
+
+  /// THE PICKER BOX (Brett 2026-09-25): the scan's finds listed by
+  /// name - his tap picks the radio. Dismissing or Cancel = no pick,
+  /// which the link reports honestly (nothing connects). The dialog
+  /// rides the NAVIGATOR (this state sits above the MaterialApp, so
+  /// its own context has no Navigator to look up).
+  Future<String?> _pickRadio(List<BleCandidate> found) {
+    // The Navigator's own context works here (Navigator.of handles
+    // a context that IS the navigator).
+    final navContext = _navKey.currentContext;
+    if (navContext == null) return Future<String?>.value(null);
+    return showDialog<String>(
+      context: navContext,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Choose the radio'),
+        children: [
+          for (final c in found)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, c.id),
+              child: Text(c.name),
+            ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
   }
 
   TcpLink _buildLink() => TcpLink(
@@ -403,7 +437,24 @@ class _MeshtechAppState extends State<MeshtechApp> {
         : airUp
             ? 'Radio active'
             : 'TCP active';
+    // THE RADIO STATUS LINE (Brett 2026-09-25): the companion link's
+    // truth in one fixed spot on the connect screen.
+    final radioStatus = switch (_airState) {
+      LinkState.connecting => 'Radio: ${_airLink.detail.isEmpty
+          ? 'scanning...'
+          : _airLink.detail}',
+      LinkState.connected => _airLink.scopeSlot == null
+          ? 'Radio: connected (${_airLink.detail}) - waiting for #scope'
+          : 'Radio: connected (${_airLink.detail})'
+              ' - #scope slot ${_airLink.scopeSlot}',
+      LinkState.disabled => switch (_airLink.detail
+          .replaceFirst('no radio: ', '')) {
+          '' => 'Radio: not connected',
+          final d => 'Radio: $d',
+        },
+    };
     return MaterialApp(
+      navigatorKey: _navKey,
       title: 'meshtech',
       theme: _bluelineTheme(),
       home: _linkState == LinkState.connected
@@ -430,6 +481,7 @@ class _MeshtechAppState extends State<MeshtechApp> {
                 settings: _settings,
                 linkState: _linkState,
                 linkDetail: _linkDetail,
+                radioStatus: radioStatus,
                 linkLog: _log,
                 onConnect: _connect,
                 onDisconnect: _disconnect,

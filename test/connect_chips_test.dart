@@ -5,9 +5,12 @@
 // door), and the not-yet-built chips say so in plain words instead of
 // pretending.
 
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:meshtech_app/app_shell.dart';
+import 'package:meshtech_app/ble_transport.dart';
 import 'package:meshtech_app/door_socket.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -34,6 +37,29 @@ class RecordingSocket implements DoorSocket {
   void close() {}
 }
 
+/// A radio that hears TWO companions - enough to need a picker box.
+class FakeBle implements BleTransport {
+  @override
+  Stream<Uint8List> get incoming => const Stream.empty();
+  @override
+  set onDisconnect(void Function(String why) f) {}
+  @override
+  String get name => 'Heltec-A';
+  @override
+  Future<List<BleCandidate>> scan(
+          {Duration timeout = const Duration(seconds: 5)}) async =>
+      const [
+        BleCandidate('id-a', 'Heltec-A'),
+        BleCandidate('id-b', 'Heltec-B'),
+      ];
+  @override
+  Future<void> connect(BleCandidate pick) async {}
+  @override
+  Future<void> write(Uint8List data) async {}
+  @override
+  Future<void> close() async {}
+}
+
 void main() {
   setUp(() {
     RecordingSocket.lastUrl = null;
@@ -54,6 +80,9 @@ void main() {
       (tester) async {
     await pumpApp(tester);
     expect(connectButton(tester).onPressed, isNull); // no chip yet
+    // THE RADIO STATUS LINE: one fixed spot, honest from launch.
+    expect(find.byKey(const ValueKey('radio-status')), findsOneWidget);
+    expect(find.text('Radio: not connected'), findsOneWidget);
 
     await tester.tap(find.widgetWithText(ChoiceChip, 'BLE'));
     await tester.pumpAndSettle();
@@ -73,6 +102,11 @@ void main() {
     // No BLE is wired in tests: the companion link says so in plain
     // words (on-screen detail + device log) instead of pretending.
     expect(find.textContaining('BLE transport wired'), findsWidgets);
+    // ...and the status line carries the refusal too.
+    final status = tester.widget<Text>(
+        find.byKey(const ValueKey('radio-status')));
+    expect(status.data, contains('BLE transport wired'));
+    expect(status.data, startsWith('Radio: '));
   });
 
   testWidgets('the USB chip is honest: not built yet, door untouched',
@@ -110,5 +144,35 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(RecordingSocket.lastUrl, 'ws://10.0.0.5:8710/feed');
+  });
+
+  testWidgets(
+      'THE PICKER BOX lists the scan finds; cancelling connects nothing',
+      (tester) async {
+    await tester.pumpWidget(const MeshtechApp(
+        socketFactory: RecordingSocket.new, bleFactory: FakeBle.new));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ChoiceChip, 'BLE'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(FilledButton));
+    await tester.pumpAndSettle();
+
+    // The box: both radios, by name (Brett 2026-09-25).
+    expect(find.text('Choose the radio'), findsOneWidget);
+    expect(find.text('Heltec-A'), findsOneWidget);
+    expect(find.text('Heltec-B'), findsOneWidget);
+    // The status line walks him through it.
+    var status = tester.widget<Text>(
+        find.byKey(const ValueKey('radio-status')));
+    expect(status.data, contains('choose a radio'));
+
+    // Cancel = no pick = nothing connects, said plainly.
+    await tester.tap(find.widgetWithText(SimpleDialogOption, 'Cancel'));
+    await tester.pumpAndSettle();
+    expect(find.text('Choose the radio'), findsNothing);
+    status =
+        tester.widget<Text>(find.byKey(const ValueKey('radio-status')));
+    expect(status.data, contains('radio selection cancelled'));
+    expect(RecordingSocket.lastUrl, isNull);
   });
 }

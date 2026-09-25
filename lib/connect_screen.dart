@@ -37,6 +37,11 @@ class ConnectScreen extends StatefulWidget {
   final VoidCallback onDisconnect;
   final LinkState linkState;
   final String linkDetail;
+
+  /// THE RADIO STATUS LINE (Brett 2026-09-25): the companion link's
+  /// state in plain words, always in the same spot - the bench reads
+  /// it at a glance instead of through adb.
+  final String radioStatus;
   final List<String> linkLog;
 
   const ConnectScreen({
@@ -46,6 +51,7 @@ class ConnectScreen extends StatefulWidget {
     required this.onDisconnect,
     required this.linkState,
     this.linkDetail = '',
+    this.radioStatus = '',
     this.linkLog = const [],
   });
 
@@ -262,6 +268,16 @@ class _ConnectScreenState extends State<ConnectScreen> {
                 : (v) => setState(() => _mapSizeKm = v ?? 40),
           ),
           const SizedBox(height: 16),
+          // THE RADIO STATUS LINE: one fixed spot, plain words,
+          // always shown - scanning / connected + #scope slot / the
+          // honest refusal. The bench's glance, not the log's scroll.
+          if (widget.radioStatus.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(widget.radioStatus,
+                  key: const ValueKey('radio-status'),
+                  style: Theme.of(context).textTheme.bodySmall),
+            ),
           FilledButton(
             onPressed: connected
                 ? widget.onDisconnect

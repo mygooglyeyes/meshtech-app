@@ -357,8 +357,26 @@ class CompanionLink implements Link {
   final Duration slotProbeGap;
   final Duration probeSummaryDelay;
 
+  // THE PICKER BOX (Brett 2026-09-25): given the scan's finds,
+  // return the chosen candidate's id - or null when the human
+  // cancelled. Null parameter = no box wired (tests, web): the
+  // first-found radio is taken.
+  final Future<String?> Function(List<BleCandidate> found)?
+      devicePicker;
+
+  /// How long to pause between connect attempts when the link bounces
+  /// (the pairing box hops the connection - bench 2026-09-25). A knob
+  /// so tests do not wait out the real seconds.
+  final Duration retryPause;
+
   LinkState _state = LinkState.disabled;
+  String _detail = '';
   bool _wantRun = false;
+
+  /// True while the connect/retry loop runs: a 'radio disconnected'
+  /// event during that window is the KNOWN pairing bounce (the app
+  /// retries it), not news - handling it would kill our own retry.
+  bool _retrying = false;
   BleTransport? _transport;
   CompanionProtocol? _proto;
   late final WireFeed _feed = WireFeed(
@@ -369,6 +387,8 @@ class CompanionLink implements Link {
 
   CompanionLink(this.events,
       {required this.transportFactory,
+      this.devicePicker,
+      this.retryPause = const Duration(milliseconds: 1500),
       this.pollInterval = const Duration(seconds: 1),
       this.slotProbeGap = const Duration(milliseconds: 120),
       this.probeSummaryDelay = const Duration(milliseconds: 1400)});
@@ -376,12 +396,21 @@ class CompanionLink implements Link {
   @override
   LinkState get state => _state;
 
+  /// The plain-words detail of the LAST state change ("scanning for
+  /// the radio", the device name, the refusal) - the connect screen's
+  /// radio status line reads it, so the bench never depends on adb.
+  String get detail => _detail;
+
+  /// The #scope slot the probe found (null until it answers).
+  int? get scopeSlot => _proto?.scopeSlot;
+
   /// The heard map geometry - the same zero-dots law as the door's
   /// (section asks computed against whatever frame either pipe heard).
   Layout? get layout => _feed.layout;
 
   void _setState(LinkState s, [String detail = '']) {
     _state = s;
+    _detail = detail;
     events.onState?.call(s, detail);
   }
 
@@ -398,34 +427,101 @@ class CompanionLink implements Link {
       // on Connecting (the bench lesson from TcpLink, applied here).
       final transport = transportFactory();
       transport.onDisconnect = (why) {
-        if (!_wantRun) return; // we dropped it on purpose
+        // A drop DURING the connect loop is the pairing bounce we
+        // retry ourselves (bench 2026-09-25, "rock solid" ask).
+        if (!_wantRun || _retrying) return;
         _wantRun = false;
         _log('companion link: $why');
         unawaited(_teardown());
         _setState(LinkState.disabled, why);
       };
-      await transport.connect();
+      // SCAN FIRST, THEN THE BOX (Brett's pick 2026-09-25): every
+      // companion heard is listed, and HIS tap chooses the radio.
+      final found = await transport.scan();
       if (!_wantRun) {
         await transport.close();
         return;
       }
-      _transport = transport;
-      _proto = CompanionProtocol(
-        transport: transport,
-        // Reassembled scope plaintexts are FULL packets (envelope
-        // intact) - straight into the shared feed.
-        onPayload: (plaintext) => _feed.feed(plaintext),
-        onLog: _log,
-        pollInterval: pollInterval,
-        slotProbeGap: slotProbeGap,
-        probeSummaryDelay: probeSummaryDelay,
-      );
-      await _proto!.start();
+      if (found.isEmpty) {
+        throw const BleRefusal('no companion radio found nearby');
+      }
+      BleCandidate pick;
+      if (devicePicker == null) {
+        pick = found.first; // no box wired (tests): first-found
+      } else {
+        _setState(LinkState.connecting, 'choose a radio from the list');
+        final id = await devicePicker!(found);
+        if (id == null || !_wantRun) {
+          _wantRun = false;
+          await transport.close();
+          _log('radio selection cancelled - nothing connected');
+          _setState(LinkState.disabled, 'radio selection cancelled');
+          return;
+        }
+        pick = found.firstWhere((c) => c.id == id,
+            orElse: () => found.first);
+      }
+      // ROCK-SOLID CONNECT (Brett 2026-09-25): Android HOPS the BLE
+      // link while the PIN box does its pairing (bench: two of three
+      // fresh attempts died with 'Device is disconnected' when our
+      // init write landed mid-bounce). The app rides it out itself:
+      // connect + protocol init as ONE unit, retried up to 3 times -
+      // no re-tapping for the human.
+      const maxAttempts = 3;
+      _retrying = true;
+      Object? bounce;
+      for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+        if (attempt > 1) {
+          _setState(LinkState.connecting,
+              'link bounced - retrying ($attempt/$maxAttempts)');
+          _log('BLE link bounced (the pairing box hops the connection)'
+              ' - retry $attempt of $maxAttempts');
+          await Future<void>.delayed(retryPause);
+          if (!_wantRun) {
+            _retrying = false;
+            await transport.close();
+            return;
+          }
+        }
+        try {
+          await transport.connect(pick);
+          _transport = transport;
+          final proto = CompanionProtocol(
+            transport: transport,
+            // Reassembled scope plaintexts are FULL packets (envelope
+            // intact) - straight into the shared feed.
+            onPayload: (plaintext) => _feed.feed(plaintext),
+            onLog: _log,
+            pollInterval: pollInterval,
+            slotProbeGap: slotProbeGap,
+            probeSummaryDelay: probeSummaryDelay,
+          );
+          _proto = proto;
+          await proto.start();
+          bounce = null;
+          break;
+        } catch (err) {
+          bounce = err;
+          // A half-open attempt must be swept BEFORE retrying (its
+          // timers/subscriptions would double-fire otherwise).
+          final proto = _proto;
+          _proto = null;
+          await proto?.stop();
+          if (attempt == maxAttempts) break;
+        }
+      }
+      _retrying = false;
+      if (bounce != null) throw bounce;
+      if (!_wantRun) {
+        await transport.close();
+        return;
+      }
       _setState(LinkState.connected, transport.name);
       _log('companion connected: ${transport.name} - receiving on the'
           ' air pipe');
     } catch (err) {
       _wantRun = false;
+      _retrying = false;
       await _teardown();
       _setState(LinkState.disabled, 'no radio: $err');
       _log('companion: $err');
