@@ -22,8 +22,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:crypto/crypto.dart';
-
 import 'ble_transport.dart';
 import 'codec.dart';
 
@@ -43,7 +41,7 @@ const int rspChannelDataRecv = 0x1b; // scope datagrams arrive here
 const int rspDeviceInfo = 0x0d;
 const int rspOk = 0x00; // TX verdict: accepted
 const int rspErr = 0x01; // TX verdict: rejected (code follows)
-const String scopeChannelName = 'scope';
+const String scopeChannelName = 'meshtech';
 
 /// One CHANNEL_INFO answer: what the radio ACTUALLY holds in a slot.
 /// The provisioner speaks in these - pre-write check and read-back
@@ -130,12 +128,6 @@ class CompanionProtocol {
   /// #scope's slot (found by the probe), or null when not found yet.
   int? get scopeSlot => _scopeSlot;
 
-  /// The expected #scope secret: sha256('#scope')[:16] - the hashtag
-  /// rule (docs.meshcore.io Channel Management; same rule the node
-  /// uses with an empty secret_hex, client.py).
-  static final List<int> expectedSecret =
-      sha256.convert(utf8.encode('#scope')).bytes.sublist(0, 16);
-
   /// Init + RX polling. Throws plain words (BleRefusal) when the
   /// init cannot be written - the caller reports it, never hangs.
   Future<void> start() async {
@@ -166,7 +158,8 @@ class CompanionProtocol {
       }));
     }
     _probeTimers.add(Timer(probeSummaryDelay, _probeSummary));
-    onLog('channel probe sent (slots 0-7) - looking for #scope');
+    onLog('channel probe sent (slots 0-7) - looking for '
+        '#$scopeChannelName');
     // One poll per second: each response is one queued packet or an
     // empty ack - both drain through _onChunk, where scope payloads
     // are extracted and everything else drops quietly.
@@ -224,7 +217,7 @@ class CompanionProtocol {
     }
     final slot = _scopeSlot;
     if (slot == null) {
-      onLog('#scope slot not found yet - uplink NOT sent');
+      onLog('#$scopeChannelName slot not found yet - uplink NOT sent');
       return false;
     }
     final bodyLen = plaintext.length > 2 ? plaintext[2] : 0;
@@ -458,10 +451,16 @@ class CompanionProtocol {
     if (_scopeSlot == idx) return; // already reported
     _scopeSlot = idx;
     final secret = frame.sublist(34, 50);
-    final match = _bytesEqual(secret, expectedSecret)
-        ? 'secret MATCHES #scope'
-        : 'secret MISMATCHES #scope - wrong key on the radio';
-    onLog('#scope found in radio slot $idx - $match');
+    // v021 (the #meshtech cutover): the app cannot know the node's
+    // key (it is not derivable from the name anymore), so the sha256
+    // guess is GONE - the radio is the source of truth for the key,
+    // and the log says exactly what was and was not verified.
+    final emptyKey = secret.every((b) => b == 0);
+    final match = emptyKey
+        ? 'slot key is EMPTY (all zeros) - provision it'
+        : 'key read from the radio (${secret.length}B) - the node '
+            'must hold the same';
+    onLog('#$scopeChannelName found in radio slot $idx - $match');
   }
 
   /// One compact line per probe sweep listing every slot heard (only
@@ -474,7 +473,8 @@ class CompanionProtocol {
       if (n != null) parts.add("$i:'$n'");
     }
     onLog(parts.isNotEmpty
-        ? 'probe heard slots: ${parts.join(' ')} - no #scope among them'
+        ? 'probe heard slots: ${parts.join(' ')} - no '
+            '#$scopeChannelName among them'
         : 'probe heard no channel info responses at all');
   }
 
@@ -544,13 +544,5 @@ class CompanionProtocol {
       onLog('TX failed: $err');
       return false;
     }
-  }
-
-  static bool _bytesEqual(List<int> a, List<int> b) {
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (a[i] != b[i]) return false;
-    }
-    return true;
   }
 }

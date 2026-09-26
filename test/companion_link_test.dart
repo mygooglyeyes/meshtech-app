@@ -226,34 +226,36 @@ void main() {
     link.disconnect();
   });
 
-  test('#scope probe finds the slot and verifies the secret', () async {
-    final fake = FakeBleTransport();
-    final logs = <String>[];
-    final link = buildLink(LinkEvents(onLog: logs.add), fake);
-    await link.connect();
-
-    fake.emit(channelInfo(3, '#scope', scopeSecret()));
-    await Future<void>.delayed(Duration.zero);
-    expect(
-        logs.contains(
-            '#scope found in radio slot 3 - secret MATCHES #scope'),
-        isTrue);
-
-    link.disconnect();
-  });
-
-  test('a wrong secret is reported as a mismatch, never trusted',
+  test('#meshtech probe finds the slot and reports the key honestly',
       () async {
     final fake = FakeBleTransport();
     final logs = <String>[];
     final link = buildLink(LinkEvents(onLog: logs.add), fake);
     await link.connect();
 
-    fake.emit(channelInfo(1, 'scope', List<int>.filled(16, 0xAB)));
+    fake.emit(channelInfo(3, 'meshtech', scopeSecret()));
+    await Future<void>.delayed(Duration.zero);
+    expect(
+        logs.contains(
+            '#meshtech found in radio slot 3 - key read from the radio '
+            '(16B) - the node must hold the same'),
+        isTrue);
+
+    link.disconnect();
+  });
+
+  test('an empty slot key is reported as empty, never trusted',
+      () async {
+    final fake = FakeBleTransport();
+    final logs = <String>[];
+    final link = buildLink(LinkEvents(onLog: logs.add), fake);
+    await link.connect();
+
+    fake.emit(channelInfo(1, 'meshtech', List<int>.filled(16, 0)));
     await Future<void>.delayed(Duration.zero);
     expect(
         logs.any((l) =>
-            l.contains('slot 1') && l.contains('MISMATCHES #scope')),
+            l.contains('slot 1') && l.contains('slot key is EMPTY')),
         isTrue);
 
     link.disconnect();
@@ -270,7 +272,7 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 90));
     expect(
         logs.any((l) =>
-            l.contains('no #scope among them') && l.contains("0:'chat'")),
+            l.contains('no #meshtech among them') && l.contains("0:'chat'")),
         isTrue);
 
     link.disconnect();
@@ -283,7 +285,8 @@ void main() {
     await link.connect();
 
     await link.sendVectoredAsk(syncMarker: 0, spanKm: 40, origin: 1);
-    expect(logs.any((l) => l.contains('#scope slot not found yet')), isTrue);
+    expect(
+        logs.any((l) => l.contains('#meshtech slot not found yet')), isTrue);
     // NOT one CMD_SEND_CHANNEL_DATA byte on the wire (polls may have
     // ticked meanwhile - the uplink itself must be absent).
     expect(
@@ -299,7 +302,7 @@ void main() {
     final logs = <String>[];
     final link = buildLink(LinkEvents(onLog: logs.add), fake);
     await link.connect();
-    fake.emit(channelInfo(2, 'scope', scopeSecret()));
+    fake.emit(channelInfo(2, 'meshtech', scopeSecret()));
     await Future<void>.delayed(Duration.zero);
 
     await link.sendVectoredAsk(syncMarker: 7, spanKm: 40, origin: 0x1234);
@@ -335,7 +338,7 @@ void main() {
     final logs = <String>[];
     final link = buildLink(LinkEvents(onLog: logs.add), fake);
     await link.connect();
-    fake.emit(channelInfo(2, 'scope', scopeSecret()));
+    fake.emit(channelInfo(2, 'meshtech', scopeSecret()));
     await Future<void>.delayed(Duration.zero);
 
     // The bench race (2026-09-25 16:19): hilltop heard the packet

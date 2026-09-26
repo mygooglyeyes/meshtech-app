@@ -23,6 +23,7 @@ import 'package:flutter/material.dart' hide Route;
 
 import 'ble_transport.dart';
 import 'codec.dart';
+import 'companion_protocol.dart' show scopeChannelName;
 import 'connect_screen.dart';
 import 'door_socket.dart';
 import 'grid.dart';
@@ -544,9 +545,10 @@ class _MeshtechAppState extends State<MeshtechApp> {
           ? 'scanning...'
           : _airLink.detail}',
       LinkState.connected => _airLink.scopeSlot == null
-          ? 'Radio: connected (${_airLink.detail}) - waiting for #scope'
+          ? 'Radio: connected (${_airLink.detail}) - waiting for '
+              '#$scopeChannelName'
           : 'Radio: connected (${_airLink.detail})'
-              ' - #scope slot ${_airLink.scopeSlot}',
+              ' - #$scopeChannelName slot ${_airLink.scopeSlot}',
       LinkState.disabled => switch (_airLink.detail
           .replaceFirst('no radio: ', '')) {
           '' => 'Radio: not connected',
