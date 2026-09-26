@@ -20,8 +20,14 @@ const Map<String, String> golden = {
   'pulse': '0153170513017eb1d20404000900280009090305080200010406',
   'sect_sum': '0253130504007eb101017e003000300300022102cdab',
   'route': '0353120502007eb101efbe38000400110003112233',
-  'layout': '0553150503007eb10344d61200a01ce9ff409c0464656d6f',
-  'intro': '04531e0502007eb1409c0211030748696c6c746f7024002400220105416c696365',
+  // v1.6 (2026-09-25): the rows byte rides at the end (03 = 3 down).
+  // Regenerated with the node's tools/gen_golden.py - the two repos'
+  // goldens stay pinned to the same bytes.
+  'layout': '0553160503007eb10344d61200a01ce9ff409c0464656d6f03',
+  // v1.6 (2026-09-26): the ruler - span field 3 LE bytes (409c00 =
+  // 40000 m). Regenerated with the node's tools/gen_golden.py.
+  'intro':
+      '04531f0602007eb1409c000211030748696c6c746f7024002400220105416c696365',
   // refresh: regenerated 2026-09-24 with the reference (v1.6 REFRESH_REQ:
   // version 06, +2 bytes sync_marker 0000 - the one wire change).
   'refresh': '115310060200420002efbe7eb1341200000000',
@@ -94,11 +100,27 @@ void main() {
       expect(l.seq, 3);
       expect(l.origin, 0xb17e);
       expect(l.grid, 3);
+      expect(l.rows, 3);
       expect(l.centerLat, closeTo(1.2345, 1e-9));
       expect(l.centerLon, closeTo(-1.5, 1e-9));
       expect(l.spanM, 40000);
       expect(l.name, 'demo');
       expect(hexOf(encodeLayout(l)), golden['layout']);
+    });
+
+    test('a packet WITHOUT the rows byte is the old square wire', () {
+      // Brett's 3x4 (2026-09-25): the rows byte rides AFTER the name
+      // so a legacy packet still decodes - as the square it always
+      // meant (grid x grid).
+      final raw = bytesOf(golden['layout']!);
+      final legacy = decodeLayout(raw.sublist(3, raw.length - 1));
+      expect((legacy.grid, legacy.rows), (3, 3));
+      // And 3x4 round-trips as itself.
+      final l = Layout(
+          seq: 3, grid: 3, rows: 4, centerLat: 1.2345, centerLon: -1.5,
+          spanM: 40000, name: 'demo');
+      final out = decodeLayout(encodeLayout(l).sublist(3));
+      expect((out.grid, out.rows), (3, 4));
     });
   });
 
@@ -139,14 +161,37 @@ void main() {
       expect(hexOf(encodeIntro(rebuilt)), golden['intro']);
     });
 
-    test('a caller span that disagrees with the packet is a loud error',
-        () {
-      final raw = bytesOf(golden['intro']!);
-      final body = raw.sublist(3);
-      expect(() => decodeIntro(body, spanM: 60000), throwsCodecError);
-      // Agreeing span passes.
-      final intro = decodeIntro(body, spanM: 40000.0);
-      expect(intro.wireSpanM, 40000);
+    test("the packet's ruler is the truth - a caller span no longer "
+        'argues with it', () {
+      // Brett's fix (2026-09-26): the span is a RULER measured to fit
+      // the data - comparing it to a LAYOUT window is noise, so a
+      // disagreeing caller span is ignored (it survives only as the
+      // fallback for pre-v1.5 packets).
+      final body = bytesOf(golden['intro']!).sublist(3);
+      final intro = decodeIntro(body, spanM: 60000);
+      expect(intro.wireSpanM, 40000); // the packet's ruler wins
+    });
+
+    test('a far node travels TRUE - never pinned at a window edge', () {
+      // The pile-of-dots fix: the ruler reaches the node, so its
+      // position round-trips true (~90 km out); a ruler that cannot
+      // reach refuses loudly instead of faking the position.
+      const far = IntroEntry(prefix: 1, name: 'Far', lat: 37.8, lon: -122.0);
+      final intro = Intro(
+          seq: 1, centerLat: 37.0, centerLon: -122.0, spanM: 150000,
+          entries: const [far]);
+      final out = decodeIntro(encodeIntro(intro).sublist(3),
+          centerLat: 37.0, centerLon: -122.0);
+      expect(out.entries.single.lat!, closeTo(37.8, 0.001));
+      expect(out.entries.single.lon!, closeTo(-122.0, 0.001));
+      expect(
+          () => encodeIntro(const Intro(
+              seq: 1,
+              centerLat: 37.0,
+              centerLon: -122.0,
+              spanM: 40000,
+              entries: [far])),
+          throwsCodecError);
     });
   });
 

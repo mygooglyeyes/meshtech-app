@@ -50,6 +50,38 @@ void main() {
     expect(grid().counts(s).sum, 0);
   });
 
+  test('a square names its section number: 1 upper left .. 12 lower '
+      'right (the numbers the wire speaks, Brett 2026-09-25)', () {
+    final g = grid();
+    // The tap lands in the square it visually hits: cellIndex and
+    // cell() agree with cellCenters (one numbering everywhere).
+    for (var i = 0; i < 12; i++) {
+      final (lat, lon) = g.cellCenters()[i];
+      expect(g.cellIndex(lat, lon), i);
+      final c = g.cell(i);
+      expect(c.id, i + 1);
+      expect(c.centerLat, closeTo(lat, 1e-9));
+      expect(c.centerLon, closeTo(lon, 1e-9));
+    }
+    // Numbering is row-major from NW: 1 upper left, 12 lower right.
+    expect(g.cell(0).id, 1);
+    expect(g.cell(11).id, 12);
+    final topLeft = g.cellCenters().first;
+    final bottomRight = g.cellCenters().last;
+    expect(g.cellIndex(topLeft.$1, topLeft.$2), 0);
+    expect(g.cellIndex(bottomRight.$1, bottomRight.$2), 11);
+    // A tap outside the view opens nothing (-1, honest no-op).
+    expect(g.cellIndex(38.5, -122.5), -1);
+  });
+
+  test('a square carries its own geography for the detail page', () {
+    final g = grid();
+    final c = g.cell(0);
+    // 4 rows over 40 km tall, 3 cols over 20 km wide.
+    expect(c.spanLatM, 10000);
+    expect(c.spanLonM, closeTo(20000 / 3, 1e-9));
+  });
+
   test('jittered camera bounds are the SAME grid (no rebuild storm)', () {
     final a = grid();
     final b = ViewGrid(

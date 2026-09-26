@@ -43,9 +43,10 @@ class MainPage extends StatefulWidget {
   final VoidCallback onDisconnect;
   final VoidCallback onAsk; // the vectored ask (Update)
   final ValueChanged<int> onMapSizeChange; // the map's +/- (rule 2)
-  final ValueChanged<DotVM> onDotTap; // the map's tap-ask (section 10)
-  final int tappedPrefix;
-  final List<int> sectionRouteIds;
+
+  /// A tap on a map square (Brett, 2026-09-25): the square's number
+  /// opens that section's detail page. The map takes no node taps.
+  final ValueChanged<SectionCell> onSectionTap;
 
   /// Test seam: widget tests can stand a plain body in for the map
   /// so no live map engine is needed. Null in the real app.
@@ -64,9 +65,7 @@ class MainPage extends StatefulWidget {
     required this.onDisconnect,
     required this.onAsk,
     required this.onMapSizeChange,
-    required this.onDotTap,
-    this.tappedPrefix = 0,
-    this.sectionRouteIds = const [],
+    required this.onSectionTap,
     this.mapBuilder,
   });
 
@@ -273,9 +272,7 @@ class _MainPageState extends State<MainPage> {
       frameCenter: widget.frameCenter,
       onAsk: widget.onAsk,
       onMapSizeChange: widget.onMapSizeChange,
-      onDotTap: widget.onDotTap,
-      tappedPrefix: widget.tappedPrefix,
-      sectionRouteIds: widget.sectionRouteIds,
+      onSectionTap: widget.onSectionTap,
     );
   }
 

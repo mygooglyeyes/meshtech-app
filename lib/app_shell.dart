@@ -27,10 +27,10 @@ import 'companion_protocol.dart'
     show channelSecretHex, scopeChannelName;
 import 'connect_screen.dart';
 import 'door_socket.dart';
-import 'grid.dart';
 import 'link.dart';
 import 'main_page.dart';
 import 'map_model.dart';
+import 'section_screen.dart';
 import 'settings.dart';
 import 'store.dart';
 
@@ -79,8 +79,16 @@ class _MeshtechAppState extends State<MeshtechApp> {
   String? _frameName;
   (double, double)? _frameCenter;
   Pulse? _pulse; // the feed-health box's food (rides whole-area answers)
-  List<int> _sectionRoutes = const []; // route stubs of the last tapped section
-  int _tappedPrefix = 0; // the node whose section was last asked (0 = none)
+  // THE SECTION DETAIL PAGE (Brett, 2026-09-25): which section's
+  // page is up (0 = none), the square it was tapped from (the
+  // page's camera), and the ONLY things a summary may drive - the
+  // page's warm route lines and its stats line. A background
+  // summary for any other section is ignored entirely (no map
+  // change, no state).
+  int _openSection = 0;
+  SectionCell? _openCell;
+  List<int> _sectionHot = const []; // the open section's route stubs
+  SectSum? _sectionSum; // the open section's latest summary
   Timer? _saveTimer;
   // THE WIPE GATE (bench law): true from launch until the debug wipe
   // has finished - the debounced store save (which would re-persist
@@ -399,10 +407,20 @@ class _MeshtechAppState extends State<MeshtechApp> {
       case final Pulse pl:
         _pulse = pl; // feed-health box (section: the web app's furniture)
       case final SectSum ss:
-        _safeSetState(() => _sectionRoutes = ss.routeStubs);
-        if (ss.routeStubs.isNotEmpty) {
-          _logLine('section ${ss.sectionId}: '
-              '${ss.routeStubs.length} route(s) listed');
+        // THE SUMMARY GATE (Brett, 2026-09-25): a summary speaks
+        // only when ITS section's detail page is open - anything
+        // else the rotating background brings is ignored entirely.
+        // Route packets still land in the store as always, so the
+        // maps' data never stops; only this page's display is gated.
+        if (_openSection != 0 && ss.sectionId == _openSection) {
+          _safeSetState(() {
+            _sectionSum = ss;
+            _sectionHot = ss.routeStubs;
+          });
+          if (ss.routeStubs.isNotEmpty) {
+            _logLine('section ${ss.sectionId}: '
+                '${ss.routeStubs.length} route(s) listed');
+          }
         }
       case final Route r:
         _store.applyRoute(r); // the tap-ask's answer lands in the store
@@ -476,6 +494,10 @@ class _MeshtechAppState extends State<MeshtechApp> {
   void _disconnect() {
     _tcpLink.disconnect();
     _airLink.disconnect();
+    // The pipes are gone: the detail page's ask can no longer be
+    // answered, so it closes with them (it returns on the map's
+    // next tap after a reconnect, never as a stale overlay).
+    _closeSection();
   }
 
   /// THE SIZE BUTTONS: stepping 20/40/60 redraws the SAME held data
@@ -507,16 +529,42 @@ class _MeshtechAppState extends State<MeshtechApp> {
     }
   }
 
-  /// THE TAP-ASK (design section 10): tapping a node asks the server
-  /// section it sits in - the answer's routes draw dot-to-dot. The
-  /// section is computed from the node's REAL position on the
-  /// server's frame (the wire's 3x3 - section ids are the server's
-  /// language), not the phone's 3x4 view grid. Same pipe choice as
-  /// the Update ask: air when the radio is live, door otherwise.
-  void _onDotTap(DotVM dot) {
-    final section = _serverSectionOf(dot);
-    if (section == 0) return; // outside every server section: honest no-op
-    setState(() => _tappedPrefix = dot.prefix);
+  /// TAP A SQUARE, OPEN THAT SECTION (Brett, 2026-09-25): the
+  /// square's NUMBER is the section id the wire speaks (1 upper
+  /// left .. 12 lower right), so the page he opens is the number he
+  /// saw. The page's camera parks on the tapped square's own
+  /// geography; the ask goes out for the section's data.
+  void _onSectionTap(SectionCell cell) {
+    setState(() {
+      _openSection = cell.id;
+      _openCell = cell;
+      // Fresh page: this section's own ask-answer brings its warm
+      // lines and stats a moment later (the gate above accepts only
+      // its summaries from there on).
+      _sectionHot = const [];
+      _sectionSum = null;
+    });
+    _askSection(cell.id);
+  }
+
+  /// Close the detail page - the page's back arrow, the system back
+  /// button, and disconnect all end here, so nothing can stay open
+  /// over a map it no longer belongs to.
+  void _closeSection() {
+    if (_openSection == 0) return;
+    setState(() {
+      _openSection = 0;
+      _openCell = null;
+      _sectionHot = const [];
+      _sectionSum = null;
+    });
+  }
+
+  /// The SECTION ASK - same pipe choice as the Update: air when the
+  /// radio is live, the door otherwise. The answer is a summary of
+  /// THIS section (the gate displays it) plus the section's top
+  /// routes, which land in the store like any Route packet.
+  void _askSection(int section) {
     if (_airState == LinkState.connected) {
       _airLink.sendSectionAsk(
           sectionId: section, origin: _settings.origin);
@@ -524,20 +572,6 @@ class _MeshtechAppState extends State<MeshtechApp> {
       _tcpLink.sendSectionAsk(
           sectionId: section, origin: _settings.origin);
     }
-  }
-
-  /// Which server 3x3 section a position falls in - computed against
-  /// the heard LAYOUT (whichever pipe heard it - the frame the wire
-  /// uses for section ids is the same on both).
-  int _serverSectionOf(DotVM dot) {
-    final l = _airLink.layout ?? _tcpLink.layout;
-    if (l == null) return 0;
-    final frame = MapFrame(
-        grid: l.grid,
-        centerLat: l.centerLat,
-        centerLon: l.centerLon,
-        spanM: l.spanM.toDouble());
-    return frame.sectionOf(dot.lat, dot.lon);
   }
 
   @override
@@ -620,22 +654,49 @@ class _MeshtechAppState extends State<MeshtechApp> {
       title: 'meshtech',
       theme: _bluelineTheme(),
       home: (_linkState == LinkState.connected && !_airChecking)
-          ? MainPage(
-              store: _store,
-              settings: _settings,
-              frameName: _frameName,
-              frameCenter: _frameCenter,
-              pulse: _pulse,
-              log: _log,
-              linkDetail: _linkDetail,
-              linkLabel: linkLabel,
-              onDisconnect: _disconnect,
-              onAsk: _ask,
-              onMapSizeChange: _changeMapSize,
-              onDotTap: _onDotTap,
-              tappedPrefix: _tappedPrefix,
-              sectionRouteIds: _sectionRoutes,
-              mapBuilder: widget.mapBuilder,
+          ? PopScope(
+              // THE SYSTEM BACK (Brett, 2026-09-25): while the
+              // detail page is up, back closes IT - never the app
+              // underneath a page still open over the map.
+              canPop: _openSection == 0,
+              onPopInvokedWithResult: (didPop, _) {
+                if (!didPop) _closeSection();
+              },
+              child: Stack(
+                children: [
+                  MainPage(
+                    store: _store,
+                    settings: _settings,
+                    frameName: _frameName,
+                    frameCenter: _frameCenter,
+                    pulse: _pulse,
+                    log: _log,
+                    linkDetail: _linkDetail,
+                    linkLabel: linkLabel,
+                    onDisconnect: _disconnect,
+                    onAsk: _ask,
+                    onMapSizeChange: _changeMapSize,
+                    onSectionTap: _onSectionTap,
+                    mapBuilder: widget.mapBuilder,
+                  ),
+                  // THE SECTION DETAIL PAGE (Brett, 2026-09-25):
+                  // rides OVER the main page - the map below stays
+                  // mounted (its pan survives the round trip) and
+                  // every packet rebuilds this page straight from
+                  // the shell's setState. Its orange lines and
+                  // stats come only from summaries of this exact
+                  // section (the gate in _onPacket).
+                  if (_openSection != 0 && _openCell != null)
+                    SectionScreen(
+                      store: _store,
+                      cell: _openCell!,
+                      hotRouteIds: _sectionHot,
+                      summary: _sectionSum,
+                      onClose: _closeSection,
+                      mapBuilder: widget.mapBuilder,
+                    ),
+                ],
+              ),
             )
           : Scaffold(
               // ConnectScreen draws TextFields: it needs a Material

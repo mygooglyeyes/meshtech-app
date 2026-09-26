@@ -28,6 +28,7 @@ import 'dart:typed_data';
 const int protoVersion = 0x05;
 const int protoVersionRefresh = 0x06;
 const int protoVersionGone = 0x06;
+const int protoVersionIntro = 0x06; // INTRO: the ruler span, 3 LE bytes
 
 const int typeGone = 0x5312;
 const int maxGonePerPacket = 8;
@@ -402,12 +403,15 @@ class Intro {
   final int seq;
   final int origin;
   final List<IntroEntry> entries;
-  // Deltas are relative to the LAYOUT centre/span; the codec needs
-  // them to encode and returns them on decode.
+  // Deltas are relative to the LAYOUT centre and the packet's RULER;
+  // the codec needs them to encode and returns them on decode.
   final double centerLat;
   final double centerLon;
   final double spanM;
   // v1.5: the span the packet itself carried (null for pre-v1.5).
+  // v1.6 (Brett's fix, 2026-09-26): it is THE RULER - the scale
+  // measured to REACH every node in the packet (3 LE meters), so no
+  // position is ever pinned at a window edge and none is dropped.
   final int? wireSpanM;
   const Intro({
     this.seq = 0,
@@ -424,16 +428,21 @@ class Intro {
     double centerLat, double centerLon, double spanM,
     double lat, double lon) {
   final spanDeg = spanM / 111320.0;
-  var dlat = ((lat - centerLat) / spanDeg * 32767).round();
-  var dlon = ((lon - centerLon) / spanDeg * 32767).round();
+  final dlat = ((lat - centerLat) / spanDeg * 32767).round();
+  final dlon = ((lon - centerLon) / spanDeg * 32767).round();
   // Note: Dart rounds half away from zero; the reference (Python)
   // rounds half to even. The golden vectors never hit an exact .5,
   // and the decode->re-encode roundtrip is FP-stable, so the byte
   // compatibility guarantee holds where it is tested.
-  if (dlat > 32767) dlat = 32767;
-  if (dlat < -32767) dlat = -32767;
-  if (dlon > 32767) dlon = 32767;
-  if (dlon < -32767) dlon = -32767;
+  //
+  // NEVER PIN (Brett's hard rule 2, 2026-09-26): a delta past the
+  // ruler's end used to be clamped there - a FABRICATED position
+  // (the pile-of-dots ring the 60 km view exposed). A ruler that
+  // cannot reach a node is a bug: refuse loudly, never fake it.
+  if (dlat < -32767 || dlat > 32767 || dlon < -32767 || dlon > 32767) {
+    throw CodecError('position ($lat, $lon) falls outside the intro '
+        'ruler ($spanM m) - widen the ruler; never pin a fake position');
+  }
   return (dlat, dlon);
 }
 
@@ -449,14 +458,14 @@ class Intro {
 Uint8List encodeIntro(Intro i) {
   if (i.entries.length > 255) throw CodecError('too many intro entries');
   final spanWire = i.spanM.round();
-  if (spanWire <= 0 || spanWire > 0xFFFF) {
+  if (spanWire <= 0 || spanWire > 0xFFFFFF) {
     throw CodecError('intro span_m out of wire range: ${i.spanM}');
   }
   final body = BytesBuilder();
-  body.add(packHeader(i.seq, i.origin));
-  final spanB = Uint8List(2);
-  ByteData.view(spanB.buffer).setUint16(0, spanWire, Endian.little);
-  body.add(spanB);
+  body.add(packHeader(i.seq, i.origin, version: protoVersionIntro));
+  // v1.6: the ruler, 3 LE bytes (the 2-byte meters field capped at
+  // 65.5 km and pinned every farther node at its end).
+  body.add([spanWire & 0xFF, (spanWire >> 8) & 0xFF, (spanWire >> 16) & 0xFF]);
   body.add([i.entries.length]);
   for (final entry in i.entries) {
     final nameBytes = utf8.encode(entry.name ?? '');
@@ -483,17 +492,31 @@ Uint8List encodeIntro(Intro i) {
 }
 
 /// Decode INTRO. Positions are reconstructed from deltas against the
-/// span THE PACKET CARRIES (v1.5) and the LAYOUT center the client
-/// already has (pass it here). [spanM] is a caller's LAYOUT span used
-/// ONLY as a cross-check - a disagreement raises (loud beats silently
-/// wrong). Leave it null to trust the packet.
+/// span THE PACKET CARRIES (since v1.5) and the LAYOUT center the
+/// client already has (pass it here). [spanM] is a fallback ONLY for
+/// pre-v1.5 packets. v1.6: the span is THE RULER - the scale
+/// measured to reach every node in the packet, so no position is
+/// ever pinned at a window edge and none is dropped (Brett's fix,
+/// 2026-09-26). The old span cross-check is gone: the packet's span
+/// is the truth.
 Intro decodeIntro(Uint8List payload,
     {double centerLat = 0.0, double centerLon = 0.0, double? spanM}) {
   final (header, off0) = unpackHeader(payload);
   var off = off0;
   final bd = ByteData.sublistView(payload);
   int wireSpan;
-  if (header.version >= 0x05) {
+  if (header.version >= 0x06) {
+    // v1.6: the ruler, 3 LE meters.
+    if (payload.length < off + 3) {
+      throw CodecError('INTRO too short for span field');
+    }
+    wireSpan = bd.getUint16(off, Endian.little) | (payload[off + 2] << 16);
+    off += 3;
+    if (wireSpan <= 0) {
+      throw CodecError('INTRO span must be positive, got $wireSpan');
+    }
+  } else if (header.version >= 0x05) {
+    // v1.5: 2 LE meters (packets still in flight from an old host).
     if (payload.length < off + 2) {
       throw CodecError('INTRO too short for span field');
     }
@@ -501,11 +524,6 @@ Intro decodeIntro(Uint8List payload,
     off += 2;
     if (wireSpan <= 0) {
       throw CodecError('INTRO span must be positive, got $wireSpan');
-    }
-    if (spanM != null && spanM.round() != wireSpan) {
-      throw CodecError(
-          'INTRO span mismatch: packet says $wireSpan m, '
-          'caller assumed ${spanM.round()} m');
     }
   } else {
     // v1.0-1.4: no span on the wire - fall back to the caller's span
@@ -562,12 +580,19 @@ Intro decodeIntro(Uint8List payload,
 
 class Layout {
   final int seq;
+
+  /// Sections ACROSS (columns) - the wire's grid byte.
   final int grid;
   final double centerLat;
   final double centerLon;
   final int spanM;
   final int origin;
   final String name;
+
+  /// Sections DOWN. 0 = the legacy square wire (grid x grid); the
+  /// v1.6 rows byte rides at the END of the body (after the name),
+  /// so one wire serves old and new packets (Brett, 2026-09-25).
+  final int rows;
   const Layout({
     required this.seq,
     required this.grid,
@@ -576,11 +601,14 @@ class Layout {
     required this.spanM,
     this.origin = 0,
     this.name = '',
+    this.rows = 0,
   });
 }
 
 Uint8List encodeLayout(Layout l) {
   if (l.grid < 2 || l.grid > 5) throw CodecError('grid out of range: ${l.grid}');
+  final rows = l.rows > 0 ? l.rows : l.grid;
+  if (rows < 2 || rows > 5) throw CodecError('rows out of range: $rows');
   final nameBytes = utf8.encode(l.name);
   final trimmed = nameBytes.length > maxName
       ? nameBytes.sublist(0, maxName)
@@ -599,6 +627,7 @@ Uint8List encodeLayout(Layout l) {
   body.add(spanB);
   body.add([trimmed.length]);
   if (trimmed.isNotEmpty) body.add(trimmed);
+  body.add([rows]); // v1.6: AFTER the name (old decoders skip it)
   return dataTypeBytes(typeLayout, body.toBytes());
 }
 
@@ -624,10 +653,19 @@ Layout decodeLayout(Uint8List payload) {
   }
   final name = utf8.decode(payload.sublist(off, off + nameLen),
       allowMalformed: true);
+  off += nameLen;
+  // v1.6 trailing rows byte; absent = the legacy square (grid x grid).
+  var rows = grid;
+  if (payload.length > off) {
+    rows = payload[off];
+    if (rows < 2 || rows > 5) {
+      throw CodecError('LAYOUT rows out of range: $rows');
+    }
+  }
   return Layout(
       seq: header.seq, grid: grid, centerLat: latE6 / 1e6,
       centerLon: lonE6 / 1e6, spanM: spanM, origin: header.origin,
-      name: name);
+      name: name, rows: rows);
 }
 
 // ---------------------------------------------------------------------------

@@ -19,7 +19,7 @@ Widget _page() => MaterialApp(
         onDisconnect: () {},
         onAsk: () {},
         onMapSizeChange: (_) {},
-        onDotTap: (_) {},
+        onSectionTap: (_) {},
         // The test seam: no live map engine in widget tests.
         mapBuilder: (_) => const SizedBox(key: Key('fake-map')),
       ),
