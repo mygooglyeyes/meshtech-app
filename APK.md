@@ -11,9 +11,10 @@ Plain directions, in order. Commands are written for **PowerShell**
 > A plain install with no fresh build **uninstalls the app first, then
 > fails** — you lose the app *and* its saved settings.
 
-Debug is the working shape. The release build compiles but MapLibre
-crashes under R8 (the map never attaches), so **do not use release
-until that fix ships.**
+Release builds work (fixed 2026-09-26): the map's keep rules live in
+`android/app/proguard-rules.pro` — R8 must never rename the classes
+the maplibre bindings call by name. If the map ever dies in release
+again, read the phone's log before guessing.
 
 ---
 
@@ -114,7 +115,7 @@ so the chip and this line must agree.
 | `INSTALL_FAILED_VERSION_DOWNGRADE` | You are putting an older build on a newer one. Same fix: uninstall once, then install. |
 | Install says `Success` but the app is the old version | The APK was stale — always build first, then install. |
 | App opens with blank address / password / BLE chip | Normal after a fresh install — the fields were wiped. Retype them and reselect the BLE chip. |
-| Map screen is blank / crashes on the **release** build | Known: MapLibre under R8. Use the **debug** build until the fix ships. |
+| Map screen is blank / crashes on the **release** build | Fixed 2026-09-26 (keep rules in `android/app/proguard-rules.pro`). If it returns, grab the log: `adb logcat -d | grep -A20 platform_views` |
 | `&&` is not a valid statement separator | You are in PowerShell — it does not accept `&&`. Use `;` on one line, or run the command in Git Bash. |
 
 ---
