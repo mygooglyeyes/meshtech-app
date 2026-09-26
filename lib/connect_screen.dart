@@ -44,6 +44,10 @@ class ConnectScreen extends StatefulWidget {
   final String radioStatus;
   final List<String> linkLog;
 
+  /// v020: open the channel-provision dialog (Brett's check-first
+  /// write to the radio's channel table). Null = not wired.
+  final Future<void> Function()? onProvision;
+
   const ConnectScreen({
     super.key,
     required this.settings,
@@ -53,6 +57,7 @@ class ConnectScreen extends StatefulWidget {
     this.linkDetail = '',
     this.radioStatus = '',
     this.linkLog = const [],
+    this.onProvision,
   });
 
   @override
@@ -293,6 +298,17 @@ class _ConnectScreenState extends State<ConnectScreen> {
               LinkState.disabled => _zipBusy ? 'Looking up ZIP...' : 'Connect',
             }),
           ),
+          // v020: the provisioner - writes a channel + key into the
+          // radio only after a fresh read says it is needed.
+          if (widget.onProvision != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: OutlinedButton(
+                key: const ValueKey('provision-channel'),
+                onPressed: widget.onProvision,
+                child: const Text('Provision channel'),
+              ),
+            ),
           if (_error != null)
             Padding(
               padding: const EdgeInsets.only(top: 8),

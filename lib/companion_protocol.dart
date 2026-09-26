@@ -34,6 +34,9 @@ const int cmdAppStart = 0x01; // first after connect
 const int cmdSyncNextMessage = 0x0a; // poll: next queued packet
 const int cmdDeviceQuery = 0x16; // arg 0x03 -> PACKET_DEVICE_INFO
 const int cmdGetChannel = 0x1f; // arg: slot 0..7
+const int cmdSetChannel = 0x20; // [slot][name 32 NUL-padded][secret]
+//   openhop frame_server._cmd_set_channel: secret may ride as 16/32
+//   raw bytes or 64 ASCII hex; we send our 16 raw bytes.
 const int cmdSendChannelData = 62; // [62][slot][0xFF]+type+payload
 const int rspChannelInfo = 0x12; // 50 B: idx,name(32),secret(16)
 const int rspChannelDataRecv = 0x1b; // scope datagrams arrive here
@@ -41,6 +44,16 @@ const int rspDeviceInfo = 0x0d;
 const int rspOk = 0x00; // TX verdict: accepted
 const int rspErr = 0x01; // TX verdict: rejected (code follows)
 const String scopeChannelName = 'scope';
+
+/// One CHANNEL_INFO answer: what the radio ACTUALLY holds in a slot.
+/// The provisioner speaks in these - pre-write check and read-back
+/// both compare against a snapshot, never against hope.
+class ChannelSnapshot {
+  final int slot;
+  final String name;
+  final Uint8List secret;
+  const ChannelSnapshot(this.slot, this.name, this.secret);
+}
 
 /// Companion CHANNEL_DATA_RECV frame: code(1)+snr(1)+rsv(2)+chan(1)+
 /// path_len(1)+data_type(2)+data_len(1)+payload. The 9-byte header is
@@ -89,6 +102,7 @@ class CompanionProtocol {
   final Duration pollInterval;
   final Duration slotProbeGap;
   final Duration probeSummaryDelay;
+  final Duration channelWait;
 
   CompanionProtocol({
     required this.transport,
@@ -98,6 +112,7 @@ class CompanionProtocol {
     this.pollInterval = const Duration(seconds: 1),
     this.slotProbeGap = const Duration(milliseconds: 120),
     this.probeSummaryDelay = const Duration(milliseconds: 1400),
+    this.channelWait = const Duration(milliseconds: 1500),
   });
 
   Uint8List _rx = Uint8List(0); // response reassembly buffer
@@ -105,7 +120,9 @@ class CompanionProtocol {
   Timer? _poll;
   final List<Timer> _probeTimers = [];
   int? _scopeSlot; // #scope's slot in the radio's channel table
-  int _awaitingTxAckMs = 0; // an uplink waiting for the radio verdict
+  int _awaitingTxAckMs = 0; // a write waiting for the radio verdict
+  String _awaitingLabel = 'uplink'; // what that verdict belongs to
+  final Map<int, Completer<ChannelSnapshot?>> _chanWait = {};
   bool _running = false;
   bool _firstPacketSeen = false;
   final Map<int, String> _probeNames = {};
@@ -172,6 +189,10 @@ class CompanionProtocol {
     _sub = null;
     _rx = Uint8List(0);
     _awaitingTxAckMs = 0;
+    for (final w in _chanWait.values) {
+      if (!w.isCompleted) w.complete(null); // honest: no answer
+    }
+    _chanWait.clear();
   }
 
   /// Send a FULL scope plaintext (3-byte envelope + body) over the
@@ -221,7 +242,120 @@ class CompanionProtocol {
     return _writeRaw(frame,
         'scope uplink sent (type 0x$hex, ${body.length}B body, slot $slot)'
         ' - awaiting radio verdict',
-        verdict: true);
+        verdictLabel: 'uplink');
+  }
+
+  // -------------------------------------------------- channel provisioning
+
+  /// The probe's slot table (slot -> name as the radio stored it) -
+  /// the provision dialog shows this as current truth before any
+  /// write is even offered.
+  Map<int, String> get probeNames => Map.unmodifiable(_probeNames);
+
+  /// Fresh read of ONE slot. Null = the radio did not answer in time
+  /// - reported as an honest gap, never guessed around.
+  Future<ChannelSnapshot?> readChannel(int slot) {
+    final wait = Completer<ChannelSnapshot?>();
+    _chanWait[slot] = wait;
+    _writeQuiet([cmdGetChannel, slot]);
+    return wait.future.timeout(channelWait, onTimeout: () {
+      _chanWait.remove(slot);
+      return null;
+    });
+  }
+
+  /// CMD_SET_CHANNEL (32): [slot][name 32, NUL-padded][secret]. The
+  /// verdict arrives like any write's - but it is only the radio's
+  /// opinion; the provisioner's READ-BACK is the proof.
+  Future<bool> setChannel(int slot, String name, Uint8List secret) {
+    final nb = utf8.encode(name);
+    final take = nb.length > 31 ? 31 : nb.length;
+    final frame = Uint8List(34 + secret.length);
+    frame[0] = cmdSetChannel;
+    frame[1] = slot;
+    frame.setRange(2, 2 + take, nb.sublist(0, take));
+    frame.setRange(34, 34 + secret.length, secret);
+    return _writeRaw(
+        frame,
+        'channel write sent (slot $slot name=$name '
+        '${secret.length}B key) - awaiting radio verdict',
+        verdictLabel: 'channel write');
+  }
+
+  /// THE PROVISION CONVERSATION (Brett's check-first rule, 2026-09-25):
+  /// read the slot FRESH, compare, ask before touching anything that
+  /// is not already correct, write, then READ IT BACK. Returns the
+  /// plain-words truth for the log; every stage line is said aloud.
+  Future<String> provisionChannel(int slot, String name, String secretHex,
+      {Future<bool> Function(String situation)? confirm,
+      void Function(String stage)? stage}) async {
+    final hex = secretHex.replaceAll(RegExp(r'\s'), '').toLowerCase();
+    if (hex.length != 32 || !RegExp(r'^[0-9a-f]+$').hasMatch(hex)) {
+      return 'key must be exactly 32 hex characters (16 bytes) - '
+          'nothing written';
+    }
+    final secret = Uint8List.fromList([
+      for (var i = 0; i < 32; i += 2) int.parse(hex.substring(i, i + 2), radix: 16),
+    ]);
+    final bare = name.startsWith('#') ? name.substring(1) : name;
+    if (bare.isEmpty) return 'channel name is empty - nothing written';
+    String norm(String n) =>
+        n.replaceFirst(RegExp(r'^#'), '').toLowerCase();
+    bool sameSecret(List<int> a) {
+      if (a.length != secret.length) return false;
+      for (var i = 0; i < a.length; i++) {
+        if (a[i] != secret[i]) return false;
+      }
+      return true;
+    }
+
+    stage?.call('reading slot $slot first');
+    final before = await readChannel(slot);
+    if (before != null &&
+        norm(before.name) == norm(bare) &&
+        sameSecret(before.secret)) {
+      final msg = 'slot $slot already holds #$bare with this exact key - '
+          'nothing written';
+      stage?.call(msg);
+      return msg;
+    }
+    String situation;
+    if (before == null) {
+      situation = 'slot $slot did not answer the read - write #$bare '
+          'there anyway?';
+    } else if (before.name.isEmpty) {
+      situation = 'slot $slot is empty - write #$bare there?';
+    } else if (norm(before.name) == norm(bare)) {
+      situation = 'slot $slot holds #$bare with a DIFFERENT key - '
+          'overwrite it?';
+    } else {
+      situation = 'slot $slot holds "${before.name}" - overwrite '
+          'with #$bare?';
+    }
+    final go = await confirm?.call(situation) ?? true;
+    if (!go) {
+      final msg = 'cancelled - slot $slot left as it was '
+          '(${before?.name ?? "no answer"})';
+      stage?.call(msg);
+      return msg;
+    }
+    stage?.call('writing slot $slot');
+    final wrote = await setChannel(slot, bare, secret);
+    stage?.call('reading slot $slot back');
+    final after = await readChannel(slot);
+    if (after != null &&
+        norm(after.name) == norm(bare) &&
+        sameSecret(after.secret)) {
+      final msg = 'slot $slot now #$bare - read back MATCHES'
+          '${wrote ? '' : ' (no verdict from the radio, but the read-back is proof)'}';
+      stage?.call(msg);
+      return msg;
+    }
+    final msg = 'write did NOT stick - slot $slot reads '
+        '${after?.name ?? "(no answer)"}'
+        '${wrote ? '' : ' and the radio refused the write'}';
+    stage?.call(msg);
+    return msg;
   }
 
   // ------------------------------------------------------------------
@@ -308,6 +442,13 @@ class CompanionProtocol {
     final name =
         utf8.decode(frame.sublist(2, end), allowMalformed: true).trim();
     _probeNames[idx] = name.isEmpty ? '(empty)' : name;
+    // v020: the provisioner asked for THIS slot - hand it the truth
+    // (name + secret) before any scope-name filtering can hide it.
+    final waiter = _chanWait.remove(idx);
+    if (waiter != null && !waiter.isCompleted) {
+      waiter.complete(ChannelSnapshot(
+          idx, name, Uint8List.fromList(frame.sublist(34, 50))));
+    }
     // Match like the plugin does (client.py _ensure_scope_channel):
     // strip the leading '#', case-insensitive - the radio may store
     // the channel as '#scope' or 'scope'.
@@ -344,7 +485,8 @@ class CompanionProtocol {
     if (_awaitingTxAckMs != 0 &&
         DateTime.now().millisecondsSinceEpoch - _awaitingTxAckMs > 6000) {
       _awaitingTxAckMs = 0;
-      onLog('uplink verdict MISSING - radio never answered the send');
+      onLog('$_awaitingLabel verdict MISSING - radio never answered'
+          ' the send');
     }
     _writeQuiet([cmdSyncNextMessage]);
   }
@@ -358,9 +500,9 @@ class CompanionProtocol {
     if (_awaitingTxAckMs == 0) return;
     _awaitingTxAckMs = 0;
     if (t == rspOk) {
-      onLog('uplink ACCEPTED by radio (OK)');
+      onLog('$_awaitingLabel ACCEPTED by radio (OK)');
     } else {
-      onLog('uplink REJECTED by radio (error code '
+      onLog('$_awaitingLabel REJECTED by radio (error code '
           '${frame.length > 1 ? frame[1] : '?'})');
     }
   }
@@ -380,14 +522,15 @@ class CompanionProtocol {
   }
 
   Future<bool> _writeRaw(Uint8List frame, String receipt,
-      {bool verdict = false}) async {
+      {String? verdictLabel}) async {
     // v019 (the 2026-09-25 16:19 bench race): arm the verdict flag
     // BEFORE the write - the radio's OK can land while the BLE write
     // future is still settling (hilltop heard the packet 278 ms
     // before our own write returned), and an OK arriving with the
     // flag down was discarded as unsolicited - printing "verdict
     // MISSING" for a send that had worked perfectly.
-    if (verdict) {
+    if (verdictLabel != null) {
+      _awaitingLabel = verdictLabel;
       _awaitingTxAckMs = DateTime.now().millisecondsSinceEpoch;
     }
     try {
@@ -395,7 +538,7 @@ class CompanionProtocol {
       onLog(receipt);
       return true;
     } catch (err) {
-      if (verdict) {
+      if (verdictLabel != null) {
         _awaitingTxAckMs = 0;
       }
       onLog('TX failed: $err');

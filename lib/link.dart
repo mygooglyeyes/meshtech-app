@@ -404,6 +404,25 @@ class CompanionLink implements Link {
   /// The #scope slot the probe found (null until it answers).
   int? get scopeSlot => _proto?.scopeSlot;
 
+  /// The probe's slot table (slot -> name) for the provision dialog's
+  /// current-truth preview. Empty when the link was never up.
+  Map<int, String> get slotNames => _proto?.probeNames ?? const {};
+
+  /// Channel provisioning (v020): the check-first conversation -
+  /// fresh read, confirm before touching, write, read back. Honest
+  /// refusal when the link is down; the return string is the log's
+  /// plain-words truth.
+  Future<String> provisionChannel(int slot, String name, String secretHex,
+      {Future<bool> Function(String situation)? confirm,
+      void Function(String stage)? stage}) async {
+    final proto = _proto;
+    if (proto == null || _state != LinkState.connected) {
+      return 'provision refused - the companion link is down';
+    }
+    return proto.provisionChannel(slot, name, secretHex,
+        confirm: confirm, stage: stage);
+  }
+
   /// The heard map geometry - the same zero-dots law as the door's
   /// (section asks computed against whatever frame either pipe heard).
   Layout? get layout => _feed.layout;

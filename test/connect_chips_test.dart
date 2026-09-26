@@ -175,4 +175,20 @@ void main() {
     expect(status.data, contains('radio selection cancelled'));
     expect(RecordingSocket.lastUrl, isNull);
   });
+
+  testWidgets('the provision button opens the channel dialog (v020)',
+      (tester) async {
+    await tester
+        .pumpWidget(const MeshtechApp(socketFactory: RecordingSocket.new));
+    expect(find.byKey(const ValueKey('provision-channel')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('provision-channel')));
+    await tester.pumpAndSettle();
+    expect(find.text('Provision radio channel'), findsOneWidget);
+    expect(find.byKey(const ValueKey('prov-slot')), findsOneWidget);
+    expect(find.byKey(const ValueKey('prov-key')), findsOneWidget);
+    expect(find.byKey(const ValueKey('prov-write')), findsOneWidget);
+    // The current-truth line is always present - even an unconnected
+    // probe says so honestly.
+    expect(find.textContaining('radio holds:'), findsOneWidget);
+  });
 }

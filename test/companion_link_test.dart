@@ -483,4 +483,125 @@ void main() {
     expect(link.state, LinkState.disabled);
     expect(logs.any((l) => l.contains('no BLE transport wired')), isTrue);
   });
+
+  // --------------------------------------------------- channel provisioning
+
+  String hexOf(List<int> bytes) =>
+      bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+  test('provision: a slot already holding the exact key writes nothing',
+      () async {
+    final fake = FakeBleTransport();
+    final logs = <String>[];
+    final link = buildLink(LinkEvents(onLog: logs.add), fake);
+    await link.connect();
+    final secret = [for (var i = 1; i <= 16; i++) i];
+    fake.onWrite = (w) {
+      if (w[0] == cmdGetChannel) fake.emit(channelInfo(5, 'scope', secret));
+    };
+    var asked = false;
+    final out = await link.provisionChannel(5, '#scope', hexOf(secret),
+        confirm: (situation) async {
+      asked = true;
+      return true;
+    });
+    expect(out, contains('already holds'));
+    expect(out, contains('nothing written'));
+    expect(asked, isFalse); // the check BEFORE the ask
+    expect(
+        fake.writes.any((w) => w.isNotEmpty && w[0] == cmdSetChannel),
+        isFalse);
+    link.disconnect();
+  });
+
+  test('provision: a DIFFERENT key needs the confirm, and declining '
+      'touches nothing', () async {
+    final fake = FakeBleTransport();
+    final logs = <String>[];
+    final link = buildLink(LinkEvents(onLog: logs.add), fake);
+    await link.connect();
+    final old = [for (var i = 1; i <= 16; i++) i];
+    final fresh = [for (var i = 16; i >= 1; i--) i];
+    fake.onWrite = (w) {
+      if (w[0] == cmdGetChannel) fake.emit(channelInfo(5, 'scope', old));
+    };
+    String? situation;
+    final out = await link.provisionChannel(5, '#scope', hexOf(fresh),
+        confirm: (s) async {
+      situation = s;
+      return false;
+    });
+    expect(situation, contains('DIFFERENT key'));
+    expect(out, contains('cancelled'));
+    expect(
+        fake.writes.any((w) => w.isNotEmpty && w[0] == cmdSetChannel),
+        isFalse);
+    link.disconnect();
+  });
+
+  test('provision: writes the exact CMD_SET_CHANNEL frame and proves '
+      'it by read-back', () async {
+    final fake = FakeBleTransport();
+    final logs = <String>[];
+    final link = buildLink(LinkEvents(onLog: logs.add), fake);
+    await link.connect();
+    final secret = [for (var i = 1; i <= 16; i++) i];
+    // Slot 2 holds a DIFFERENT channel until the SET write lands -
+    // then every read answers with the new truth (the read-back).
+    var current = channelInfo(2, 'public', [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    fake.onWrite = (w) {
+      if (w[0] == cmdGetChannel) {
+        fake.emit(current);
+      } else if (w[0] == cmdSetChannel) {
+        final name = utf8
+            .decode(w.sublist(2, 34), allowMalformed: true)
+            .split('\x00')
+            .first;
+        current = channelInfo(w[1], name, w.sublist(34));
+        fake.emit([0x00]); // the radio's verdict for the write
+      }
+    };
+    final out = await link.provisionChannel(2, '#meshtech', hexOf(secret),
+        confirm: (situation) async => true);
+    expect(out, contains('read back MATCHES'));
+    expect(out, contains('#meshtech'));
+    // The exact reference frame: [32][slot][name 32 NUL-padded][key].
+    final set = fake.writes
+        .firstWhere((w) => w.isNotEmpty && w[0] == cmdSetChannel);
+    expect(set.length, 50);
+    expect(set[1], 2);
+    expect(utf8.decode(set.sublist(2, 34)).split('\x00').first,
+        'meshtech');
+    expect(set.sublist(34), equals(secret));
+    expect(logs.any((l) => l.contains('channel write ACCEPTED by radio')),
+        isTrue);
+    link.disconnect();
+  });
+
+  test('provision: a malformed key refuses before touching the radio',
+      () async {
+    final fake = FakeBleTransport();
+    final logs = <String>[];
+    final link = buildLink(LinkEvents(onLog: logs.add), fake);
+    await link.connect();
+    final out = await link.provisionChannel(5, '#meshtech', 'nothex!!');
+    expect(out, contains('32 hex characters'));
+    expect(
+        fake.writes.any((w) => w.isNotEmpty && w[0] == cmdSetChannel),
+        isFalse);
+    link.disconnect();
+  });
+
+  test('provision: with the link down the refusal is in plain words',
+      () async {
+    final fake = FakeBleTransport();
+    final logs = <String>[];
+    final link = buildLink(LinkEvents(onLog: logs.add), fake); // no connect
+    final out = await link.provisionChannel(
+        5, '#meshtech', hexOf([for (var i = 0; i < 16; i++) i]));
+    expect(out, contains('companion link is down'));
+    expect(
+        fake.writes.any((w) => w.isNotEmpty && w[0] == cmdSetChannel),
+        isFalse);
+  });
 }

@@ -175,6 +175,106 @@ class _MeshtechAppState extends State<MeshtechApp> {
     );
   }
 
+  /// THE PROVISION DIALOG (v020, Brett's check-first rule): shows the
+  /// probe's slot table as current truth, collects slot/name/key, and
+  /// runs the read -> confirm -> write -> read-back conversation.
+  /// Every stage line and the final verdict land in the log - the
+  /// honesty rule applied to provisioning.
+  Future<void> _provisionChannel() async {
+    final navContext = _navKey.currentContext;
+    if (navContext == null) return;
+    final currentSlot = _airLink.scopeSlot ?? 0;
+    final currentName =
+        _airLink.slotNames[_airLink.scopeSlot] ??
+        _airLink.slotNames[currentSlot] ??
+        '';
+    final slotCtrl = TextEditingController(text: '$currentSlot');
+    final nameCtrl = TextEditingController(text: currentName);
+    final keyCtrl = TextEditingController();
+    final slots = _airLink.slotNames.isEmpty
+        ? '(the probe has not heard the slots yet)'
+        : _airLink.slotNames.entries
+            .map((e) => "${e.key}: '${e.value}'")
+            .join('   ');
+    final picked = await showDialog<(int, String, String)>(
+      context: navContext,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Provision radio channel'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('radio holds: $slots',
+                  style: Theme.of(ctx).textTheme.bodySmall),
+              const SizedBox(height: 12),
+              TextField(
+                controller: slotCtrl,
+                key: const ValueKey('prov-slot'),
+                decoration: const InputDecoration(labelText: 'slot (0-7)'),
+                keyboardType: TextInputType.number,
+              ),
+              TextField(
+                controller: nameCtrl,
+                key: const ValueKey('prov-name'),
+                decoration:
+                    const InputDecoration(labelText: 'channel name'),
+              ),
+              TextField(
+                controller: keyCtrl,
+                key: const ValueKey('prov-key'),
+                decoration: const InputDecoration(
+                    labelText: 'key - 32 hex chars (16 bytes)'),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel')),
+          TextButton(
+            key: const ValueKey('prov-write'),
+            onPressed: () {
+              final slot = int.tryParse(slotCtrl.text.trim()) ?? -1;
+              if (slot < 0 || slot > 7) return;
+              Navigator.pop(
+                  ctx, (slot, nameCtrl.text.trim(), keyCtrl.text));
+            },
+            child: const Text('Write'),
+          ),
+        ],
+      ),
+    );
+    if (picked == null) return;
+    final result = await _airLink.provisionChannel(
+      picked.$1,
+      picked.$2,
+      picked.$3,
+      confirm: (situation) async {
+        if (!navContext.mounted) return false;
+        return await showDialog<bool>(
+              context: navContext,
+              builder: (ctx) => AlertDialog(
+                title: const Text('Overwrite this slot?'),
+                content: Text(situation),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('Cancel')),
+                  TextButton(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('Overwrite')),
+                ],
+              ),
+            ) ??
+            false;
+      },
+      stage: _logLine,
+    );
+    _logLine(result);
+  }
+
   TcpLink _buildLink() => TcpLink(
         _tcpEvents,
         host: _settings.host,
@@ -485,6 +585,7 @@ class _MeshtechAppState extends State<MeshtechApp> {
                 linkLog: _log,
                 onConnect: _connect,
                 onDisconnect: _disconnect,
+                onProvision: _provisionChannel,
               ),
             ),
     );
