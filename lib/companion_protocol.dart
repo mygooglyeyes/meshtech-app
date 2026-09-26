@@ -43,6 +43,16 @@ const int rspOk = 0x00; // TX verdict: accepted
 const int rspErr = 0x01; // TX verdict: rejected (code follows)
 const String scopeChannelName = 'meshtech';
 
+/// THE SHARED CHANNEL KEY (Brett 2026-09-25 - his waiver of rule
+/// zero, in his words: "this is open source, and the key is not
+/// critical. just having it different than the default is
+/// sufficient"). ONE key, shared by every phone and every node: each
+/// node's config.json carries the same hex as channel.secret_hex, so
+/// several nodes and several phones end up on ONE channel. The old
+/// sha256('#scope') guess is gone for good - the name alone can no
+/// longer hand anyone the key.
+const String channelSecretHex = 'f5a660b67dcfdf6b1adea876443091d7';
+
 /// One CHANNEL_INFO answer: what the radio ACTUALLY holds in a slot.
 /// The provisioner speaks in these - pre-write check and read-back
 /// both compare against a snapshot, never against hope.
@@ -124,15 +134,28 @@ class CompanionProtocol {
   bool _running = false;
   bool _firstPacketSeen = false;
   final Map<int, String> _probeNames = {};
+  Completer<void> _probeSettled = Completer<void>();
 
   /// #scope's slot (found by the probe), or null when not found yet.
   int? get scopeSlot => _scopeSlot;
+
+  /// THE PROBE'S SETTLE POINT: completes as soon as the channel is
+  /// found, or when the sweep's summary timer runs (all 8 slots asked
+  /// + their answer windows), or when the protocol stops. The
+  /// automatic channel check waits on THIS so it never reads a
+  /// half-probed slot table and calls it truth.
+  Future<void> get probeSettled => _probeSettled.future;
+
+  void _settleProbe() {
+    if (!_probeSettled.isCompleted) _probeSettled.complete();
+  }
 
   /// Init + RX polling. Throws plain words (BleRefusal) when the
   /// init cannot be written - the caller reports it, never hangs.
   Future<void> start() async {
     if (_running) return;
     _running = true;
+    _probeSettled = Completer<void>(); // fresh sweep, fresh settle point
     _sub = transport.incoming.listen(_onChunk);
     try {
       // CMD_APP_START: [0x01][7 reserved zeros][name] - must come
@@ -172,6 +195,7 @@ class CompanionProtocol {
 
   Future<void> stop() async {
     _running = false;
+    _settleProbe(); // no waiter may hang on a protocol that stopped
     _poll?.cancel();
     _poll = null;
     for (final t in _probeTimers) {
@@ -461,11 +485,14 @@ class CompanionProtocol {
         : 'key read from the radio (${secret.length}B) - the node '
             'must hold the same';
     onLog('#$scopeChannelName found in radio slot $idx - $match');
+    // The channel is here: the auto check need not wait the sweep out.
+    _settleProbe();
   }
 
   /// One compact line per probe sweep listing every slot heard (only
   /// when no #scope turned up - a found slot already logged itself).
   void _probeSummary() {
+    _settleProbe(); // every slot's answer window has passed by now
     if (!_running || _scopeSlot != null) return;
     final parts = <String>[];
     for (var i = 0; i < 8; i++) {

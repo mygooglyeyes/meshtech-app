@@ -607,4 +607,107 @@ void main() {
         fake.writes.any((w) => w.isNotEmpty && w[0] == cmdSetChannel),
         isFalse);
   });
+
+  // ------------------------------------------------- the automatic channel check
+  //
+  // v022 (Brett 2026-09-25): the app settles the channel on its own
+  // the moment the radio links up - probe, compare against THE shared
+  // key, write what is missing, read it back. No human in the middle.
+
+  /// A radio whose channel table the test owns - the probe's reads
+  /// answer with it, CMD_SET_CHANNEL rewrites it, verdict included.
+  Map<int, Uint8List> radioTable(Map<int, Uint8List> initial,
+      FakeBleTransport fake) {
+    final table = Map<int, Uint8List>.of(initial);
+    fake.onWrite = (w) {
+      if (w.isEmpty) return;
+      if (w[0] == cmdGetChannel) {
+        final slot = w[1];
+        fake.emit(table[slot] ?? channelInfo(slot, '', List.filled(16, 0)));
+      } else if (w[0] == cmdSetChannel) {
+        final name = utf8
+            .decode(w.sublist(2, 34), allowMalformed: true)
+            .split('\x00')
+            .first;
+        table[w[1]] = channelInfo(w[1], name, w.sublist(34));
+        fake.emit([0x00]); // the radio's verdict for the write
+      }
+    };
+    return table;
+  }
+
+  test('ensureChannel: already there with THE key - nothing written',
+      () async {
+    final fake = FakeBleTransport();
+    final logs = <String>[];
+    radioTable({5: channelInfo(5, 'meshtech', bytesOf(channelSecretHex))},
+        fake);
+    final link = buildLink(LinkEvents(onLog: logs.add), fake);
+    await link.connect();
+
+    final out =
+        await link.ensureChannel(secretHex: channelSecretHex, stage: logs.add);
+    expect(out, contains('already holds'));
+    expect(out, contains('nothing written'));
+    expect(
+        fake.writes.any((w) => w.isNotEmpty && w[0] == cmdSetChannel),
+        isFalse);
+    expect(link.scopeSlot, 5); // the probe named it for the uplink
+    link.disconnect();
+  });
+
+  test('ensureChannel: a radio still on the old channel is written '
+      'without asking - and proved by read-back', () async {
+    final fake = FakeBleTransport();
+    final logs = <String>[];
+    radioTable({5: channelInfo(5, 'scope', scopeSecret())}, fake);
+    final link = buildLink(LinkEvents(onLog: logs.add), fake);
+    await link.connect();
+
+    final out =
+        await link.ensureChannel(secretHex: channelSecretHex, stage: logs.add);
+    expect(out, contains('read back MATCHES'));
+    expect(out, contains('slot 5'));
+    final set = fake.writes
+        .firstWhere((w) => w.isNotEmpty && w[0] == cmdSetChannel);
+    expect(set[1], 5); // the slot the probe found the OLD channel in
+    expect(utf8.decode(set.sublist(2, 34)).split('\x00').first,
+        scopeChannelName);
+    expect(set.sublist(34), equals(bytesOf(channelSecretHex)));
+    // Nobody was asked - but the app SAYS it answered for the human.
+    expect(logs.any((l) => l.contains('channel check writes it')), isTrue);
+    expect(link.scopeSlot, 5);
+    link.disconnect();
+  });
+
+  test('ensureChannel: the right name with the WRONG key is rewritten',
+      () async {
+    final fake = FakeBleTransport();
+    final logs = <String>[];
+    radioTable({5: channelInfo(5, 'meshtech', List.filled(16, 7))}, fake);
+    final link = buildLink(LinkEvents(onLog: logs.add), fake);
+    await link.connect();
+
+    final out =
+        await link.ensureChannel(secretHex: channelSecretHex, stage: logs.add);
+    // The mismatch is named in the confirm line the app speaks aloud.
+    expect(logs.any((l) => l.contains('DIFFERENT key')), isTrue);
+    expect(out, contains('read back MATCHES'));
+    final set = fake.writes
+        .firstWhere((w) => w.isNotEmpty && w[0] == cmdSetChannel);
+    expect(set.sublist(34), equals(bytesOf(channelSecretHex)));
+    link.disconnect();
+  });
+
+  test('ensureChannel: with the link down the refusal is in plain words',
+      () async {
+    final fake = FakeBleTransport();
+    final logs = <String>[];
+    final link = buildLink(LinkEvents(onLog: logs.add), fake); // no connect
+    final out = await link.ensureChannel(secretHex: channelSecretHex);
+    expect(out, contains('companion link is down'));
+    expect(
+        fake.writes.any((w) => w.isNotEmpty && w[0] == cmdSetChannel),
+        isFalse);
+  });
 }

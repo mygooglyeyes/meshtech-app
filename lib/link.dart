@@ -348,6 +348,12 @@ class TcpLink implements Link {
 // the one decoder path.
 // ---------------------------------------------------------------------------
 
+/// How long the automatic channel check waits for the 8-slot probe to
+/// settle before it reads a slot anyway. The real sweep answers in
+/// ~1.4 s (probeSummaryDelay); this is the belt-and-braces ceiling so
+/// an unanswered radio can never hang the check - and with it the map.
+const Duration channelCheckWait = Duration(seconds: 4);
+
 class CompanionLink implements Link {
   final LinkEvents events;
   final BleTransportFactory transportFactory;
@@ -407,6 +413,63 @@ class CompanionLink implements Link {
   /// The probe's slot table (slot -> name) for the provision dialog's
   /// current-truth preview. Empty when the link was never up.
   Map<int, String> get slotNames => _proto?.probeNames ?? const {};
+
+  /// The probe's settle point (see CompanionProtocol.probeSettled):
+  /// found, swept, or stopped - never a half-probed table.
+  Future<void> get probeSettled async {
+    final proto = _proto;
+    if (proto == null) return;
+    await proto.probeSettled;
+  }
+
+  /// THE AUTOMATIC CHANNEL CHECK (v022, Brett 2026-09-25): the app
+  /// settles the channel BY ITSELF the moment the radio links up -
+  /// connect -> check/provision -> map, no human in the middle.
+  ///   * [name] with THE key already in a slot: nothing written.
+  ///   * missing, empty-keyed or wrong-keyed: that slot is written
+  ///     with [secretHex] and proved by read-back (the radio's verdict
+  ///     is only its opinion - the read-back is the proof).
+  /// The slot is the one the probe found, else the one still holding
+  /// the old default channel, else 5. Returns the log's plain-words
+  /// verdict; the caller decides what the map does with it.
+  Future<String> ensureChannel({
+    String name = scopeChannelName,
+    required String secretHex,
+    void Function(String stage)? stage,
+  }) async {
+    final proto = _proto;
+    if (proto == null || _state != LinkState.connected) {
+      return 'channel check refused - the companion link is down';
+    }
+    try {
+      await proto.probeSettled.timeout(channelCheckWait);
+    } on TimeoutException {
+      // The sweep never settled. The fresh read inside the provision
+      // is still the truth - it simply picks the likely slot itself.
+      stage?.call('the slot probe never settled - reading a slot anyway');
+    }
+    var slot = scopeSlot;
+    if (slot == null) {
+      for (final e in slotNames.entries) {
+        final held =
+            e.value.replaceFirst(RegExp(r'^#'), '').toLowerCase();
+        if (held == 'scope') {
+          slot = e.key;
+          break;
+        }
+      }
+    }
+    slot ??= 5;
+    return provisionChannel(slot, name, secretHex,
+        // THE APP ANSWERS ITSELF (v022): the check runs unattended, so
+        // instead of asking a human who is not there it says out loud
+        // what it is about to do - then does it.
+        confirm: (situation) async {
+          stage?.call('$situation - the channel check writes it');
+          return true;
+        },
+        stage: stage);
+  }
 
   /// Channel provisioning (v020): the check-first conversation -
   /// fresh read, confirm before touching, write, read back. Honest

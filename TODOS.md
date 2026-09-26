@@ -1,6 +1,95 @@
 # meshtech-app - TODOS (order matters, top first)
 
-## BUILT, UNCOMMITTED (2026-09-24, Brett's "correct" + additions): ROUTE
+## SHIPPED (2026-09-25 LATER): CHANNEL CUTOVER #scope -> #meshtech,
+## PROVISIONED BY THE APP ITSELF - PROVEN BOTH WAYS ON HARDWARE.
+## app (UNCOMMITTED) = v00.000.022, 89 tests green, analyze clean,
+## debug build on the Pixel; node 69cbedb = v00.000.051 pushed +
+## deployed; box config on #meshtech, service active, logging INFO.
+THE FLOW (Brett's pick): tap BLE chip -> pick radio -> PIN -> the
+app checks the channel ITSELF: there = straight to the map; missing
+or wrong key = it writes #meshtech with THE shared key, proves it by
+read-back, THEN the map. If the write cannot be proved the map STAYS
+DOWN and the connect screen keeps the honest line + the retry button.
+WHY: sha256('#scope') is derivable from the name alone - anyone with
+a default #scope could read and inject. The new key is random, kept
+on the box (/opt/meshtech-node/channel.key, 0600) AND as a constant
+in the app - Brett's rule-zero waiver in his words: "this is open
+source, and the key is not critical. just having it different than
+the default is sufficient". Every future node gets the SAME hex in
+its config.json channel.secret_hex, so several nodes + every phone
+share ONE channel.
+PROOF PAIRED TO THE SECOND: phone ask 18:36:36,070 -> node "Uplink
+from unknown client - grace window open" + "Refresh from unknown:
+kind=1 target=0 span=40km marker=0 -> 12 packet(s)" at .223 ->
+phone "air <- layout / sections 1..9 / INTRO -> 241 node(s)".
+WHAT CHANGED (v020 -> v022): the Provision button lived on the
+connect screen, which the app leaves the instant a pipe is live - so
+it could only be SEEN when it could not work, and only WORK when it
+could not be seen. v022 replaces it with the automatic check:
+CompanionProtocol.probeSettled (finds early, else the sweep's
+summary timer, else stopped - never a half-probed table) +
+CompanionLink.ensureChannel (probe slot, else the slot still holding
+'scope', else 5; check-first read, auto-yes logged out loud,
+read-back is the proof) + the shell's _airChecking gate. The manual
+dialog stays as the honest retry. Radio slot 5 now holds #meshtech
+(auto-written 18:36:08, "read back MATCHES", key read back 16B).
+TESTS: 4 link-level (already-there writes nothing / old channel
+rewritten with THE key / wrong key under the right name rewritten /
+link down refuses plainly) + 3 screen-flow (already there -> map,
+old channel -> write + prove -> map, unanswerable radio -> map stays
+down with the honest line). MeshtechApp gained a mapBuilder test
+seam (the same one MainPage already had) so no map engine runs in
+the harness.
+QUEUE (Brett's go, none started): release-build map fix; answer-
+progress on Update; hilltop CAD-timeout hunt; manage.sh txmode bugs.
+
+## SHIPPED (2026-09-25): AIR REFRESH ROUND TRIP - PROVEN ON HARDWARE
+## app dev 5f03ff9 = v00.000.019 (pushed, debug build on the Pixel);
+## node 48a35e4 = v00.000.050 (pushed + deployed via manage.sh).
+## 76 app tests / 312 node tests green. Doc edits NOT committed.
+ONE PRESS, FULL LOOP: Update -> cmd 62 frame -> radio OTA -> hilltop
+decodes -> "Refresh from unknown ... -> 12 packet(s)" -> answer
+burst -> phone "air <- layout / sections 1..9 / INTRO / pulse"
+(both journals paired to the second).
+THREE BUGS KILLED TODAY:
+1. node v050: config logging.level was parsed and NEVER APPLIED
+   (dead switch) - wired to the root logger; the three silent drop
+   points (group-frame decrypt fail, no on_scope callback wired,
+   decoded wrong-type packet) now speak at DEBUG. The trace named
+   the gate: "#scope plaintext type 8d06 is not scope traffic".
+2. app v018: the cmd-62 frame was missing its data_type field -
+   the radio read the type from the body's first two bytes (0x06
+   version + seq lo = 0x8d06), wrapped those, and the node
+   honestly refused every ask. Frame is now
+   [62][slot][0xFF][type 2 LE][body]; the body still travels
+   WITHOUT its 3-byte envelope (the radio adds it - the 2026-09-18
+   double-wrap law, re-verified in openhop_core).
+3. app v019: verdict race - the radio's OK landed while the BLE
+   write future was still settling (the node heard the packet
+   278 ms before our own write returned); the flag now arms
+   BEFORE the write. Bench proof: ACCEPTED at .344, receipt at
+   .346, no phantom MISSING.
+FACTS: box logging is back to INFO (service active) - the DEBUG
+switch stays wired for next time (logging.level=DEBUG + restart).
+The FIRST release build compiles but MapLibre crashes under R8
+(PlatformException NullPointerException, map widget never
+attaches) - debug is the working shape. NEVER run a plain
+`flutter install` with no apk built: it UNINSTALLS FIRST, then
+fails (app + saved settings lost).
+QUEUE (Brett's go, none started): release-build map fix; answer-
+progress on the Update button; hilltop CAD-timeout hunt.
+
+## SHIPPED (2026-09-24 LATE): dev branch commit b635f81 PUSHED on
+## Brett's "commit" - 49 tests green, analyzer clean (same 5
+## map-leftover warnings). Everything below that said "UNCOMMITTED"
+## is now committed. Bench fact at stop: phone on hilltop = 219
+## nodes / 0 routes (honest - the server's new route table was born
+## empty; fills from live traffic). Server half live at v00.000.046.
+## FULL DETAIL: C:\projects\HANDOFF.md top block.
+## NEXT (Brett's go needed, NOT started): server-side route DETAILS
+## on the connect burst - v00.000.047. Then the queued chapters below.
+
+## PREVIOUSLY BUILT (2026-09-24, Brett's "correct" + additions): ROUTE
 ## FADE + NODE RED + ROUTE TIMING on the phone - 49 tests green, analyzer
 ## clean (same 5 map-leftover warnings as before). SERVER half (meshtech-
 ## node, version 00.000.046, 300 tests green): routes-on-disk (routes
@@ -19,8 +108,6 @@ Routes tab; the route's MEASURED start-to-end time shows in the list
 stamps); the store REFUSES a past-dead route answer (direct > 7d,
 multi-hop > 14d). Analyzer note: browser_screen.dart now hides
 Flutter's Navigator Route (same name clash app_shell already solved).
-NEXT: bench-verify against hilltop after Brett's deploy word; queued
-open-sequence chapter still waits for his go.
 
 ## PREVIOUSLY BUILT, UNCOMMITTED (2026-09-24, Brett's "routes next"): ROUTE
 ## LAYER + 3x4 VIEW GRID + SIZE BUTTONS - 44 tests green, analyzer clean

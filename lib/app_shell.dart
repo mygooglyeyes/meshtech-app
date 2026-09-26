@@ -23,7 +23,8 @@ import 'package:flutter/material.dart' hide Route;
 
 import 'ble_transport.dart';
 import 'codec.dart';
-import 'companion_protocol.dart' show scopeChannelName;
+import 'companion_protocol.dart'
+    show channelSecretHex, scopeChannelName;
 import 'connect_screen.dart';
 import 'door_socket.dart';
 import 'grid.dart';
@@ -36,10 +37,16 @@ import 'store.dart';
 class MeshtechApp extends StatefulWidget {
   final DoorSocketFactory socketFactory;
   final BleTransportFactory bleFactory;
+
+  /// Test seam (the same one MainPage offers): a widget test stands a
+  /// plain body in for the map, so no live map engine is needed in the
+  /// test harness. Null in the real app.
+  final WidgetBuilder? mapBuilder;
   const MeshtechApp(
       {super.key,
       this.socketFactory = _noSocket,
-      this.bleFactory = _noBle});
+      this.bleFactory = _noBle,
+      this.mapBuilder});
 
   @override
   State<MeshtechApp> createState() => _MeshtechAppState();
@@ -125,10 +132,22 @@ class _MeshtechAppState extends State<MeshtechApp> {
       onReset: () => _store.resetAll(),
     );
     _airEvents = LinkEvents(
-      onState: (s, d) => _safeSetState(() {
-        _airState = s;
-        _linkDetail = d;
-      }),
+      onState: (s, d) {
+        _safeSetState(() {
+          _airState = s;
+          _linkDetail = d;
+        });
+        if (s == LinkState.connected) {
+          // THE AUTO CHANNEL CHECK (v022, Brett's flow 2026-09-25):
+          // connect -> the app checks/provisions the channel itself ->
+          // map. No human in the middle, no Connect screen in the way.
+          unawaited(_checkAirChannel());
+        } else if (_airChecking) {
+          // The pipe went away: no check can finish on it, and no gate
+          // may wait on one that never will.
+          _safeSetState(() => _airChecking = false);
+        }
+      },
       onPacket: (packet, {heardMs}) => _onPacket(packet, heardMs),
       onLog: _logLine,
     );
@@ -174,6 +193,39 @@ class _MeshtechAppState extends State<MeshtechApp> {
         ],
       ),
     );
+  }
+
+  /// THE CHANNEL GATE (v022): true from the moment the radio pipe
+  /// links up until the channel check has PROVED #$scopeChannelName is
+  /// in the radio. While it is true the map stays down and the connect
+  /// screen carries the log - a failed check keeps it there, where the
+  /// Provision channel button is the honest retry.
+  bool _airChecking = false;
+
+  /// The check the air link's connect runs for itself: probe, compare
+  /// against THE shared key, write what is missing, read it back. The
+  /// verdict lands in the log either way - the honesty rule applied to
+  /// an unattended write.
+  Future<void> _checkAirChannel() async {
+    if (!_mounted || _airChecking) return;
+    _safeSetState(() => _airChecking = true);
+    String verdict;
+    try {
+      verdict = await _airLink.ensureChannel(
+          secretHex: channelSecretHex, stage: _logLine);
+    } catch (err) {
+      verdict = 'channel check failed: $err';
+    }
+    _logLine(verdict);
+    if (!_mounted) return;
+    if (_airLink.scopeSlot == null) {
+      _logLine('#$scopeChannelName is not in the radio - the map stays '
+          'down until it is (Provision channel retries it)');
+      return; // gate held: the honest refusal stays on screen
+    }
+    if (_airState == LinkState.connected) {
+      _safeSetState(() => _airChecking = false);
+    }
   }
 
   /// THE PROVISION DIALOG (v020, Brett's check-first rule): shows the
@@ -274,6 +326,11 @@ class _MeshtechAppState extends State<MeshtechApp> {
       stage: _logLine,
     );
     _logLine(result);
+    // A manual retry that WORKED releases the same gate the automatic
+    // check holds: the map opens the moment the channel is proved.
+    if (_airChecking && _airLink.scopeSlot != null) {
+      _safeSetState(() => _airChecking = false);
+    }
   }
 
   TcpLink _buildLink() => TcpLink(
@@ -544,11 +601,14 @@ class _MeshtechAppState extends State<MeshtechApp> {
       LinkState.connecting => 'Radio: ${_airLink.detail.isEmpty
           ? 'scanning...'
           : _airLink.detail}',
-      LinkState.connected => _airLink.scopeSlot == null
-          ? 'Radio: connected (${_airLink.detail}) - waiting for '
-              '#$scopeChannelName'
-          : 'Radio: connected (${_airLink.detail})'
-              ' - #$scopeChannelName slot ${_airLink.scopeSlot}',
+      LinkState.connected => _airChecking
+          ? 'Radio: connected (${_airLink.detail}) - checking '
+              '#$scopeChannelName now'
+          : _airLink.scopeSlot == null
+              ? 'Radio: connected (${_airLink.detail}) - waiting for '
+                  '#$scopeChannelName'
+              : 'Radio: connected (${_airLink.detail})'
+                  ' - #$scopeChannelName slot ${_airLink.scopeSlot}',
       LinkState.disabled => switch (_airLink.detail
           .replaceFirst('no radio: ', '')) {
           '' => 'Radio: not connected',
@@ -559,7 +619,7 @@ class _MeshtechAppState extends State<MeshtechApp> {
       navigatorKey: _navKey,
       title: 'meshtech',
       theme: _bluelineTheme(),
-      home: _linkState == LinkState.connected
+      home: (_linkState == LinkState.connected && !_airChecking)
           ? MainPage(
               store: _store,
               settings: _settings,
@@ -575,6 +635,7 @@ class _MeshtechAppState extends State<MeshtechApp> {
               onDotTap: _onDotTap,
               tappedPrefix: _tappedPrefix,
               sectionRouteIds: _sectionRoutes,
+              mapBuilder: widget.mapBuilder,
             )
           : Scaffold(
               // ConnectScreen draws TextFields: it needs a Material
