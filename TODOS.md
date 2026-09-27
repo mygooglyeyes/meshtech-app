@@ -1,5 +1,37 @@
 # meshtech-app - TODOS (order matters, top first)
 
+## SHIPPED + PUSHED (2026-09-26 LATE NIGHT): THE AIRTIME HEARTBEAT -
+## app v00.000.028 (dafbcd4 on dev, analyze clean, 105 tests green)
+## + node v00.000.058 (191d13b, DEPLOYED on hilltop). Brett's airtime
+## rule, both halves: the app sends a tiny HEARTBEAT (0x5313, 8
+## bytes, byte-identical to the node codec) right at connected -
+## retried at the poll cadence until the slot probe lands the first
+## one - then every 2 MINUTES while the app is open
+## (heartbeatInterval knob); teardown stops it clean. Hilltop keeps
+## its own broadcasts flowing only while heartbeats/on-air refreshes
+## arrive inside his 5-minute window. Log line when the first lands:
+## 'heartbeat on the air - hilltop knows the app is listening'.
+## LIVE PROOF on the bench 2026-09-26 22:10-22:15: heartbeat heard
+## -> AIR AUDIENCE up -> app closed -> gone (300s). Release APK
+## (028) built + installed on the phone.
+
+## (previous) SHIPPED (2026-09-26): THE SECTION CHAPTER - app v00.000.026
+## (406de70 on dev, PUSHED, 101 tests green) + node v00.000.052
+## (f1a199d, PUSHED + DEPLOYED on hilltop). Quiet main map (no
+## orange ever, no node taps); tap a square -> section detail page
+## (nodes with names, its own route toggle, orange only from THAT
+## section's summaries, tap-select / tap-again-deselect); 3x4
+## squares with ghost blue numbers 1-12 fading centre-out and tiny
+## node counts upper-left; both cameras locked (fingers dead, +- 
+## steps 20/40/60); positions ride the packet's ruler at any zoom -
+## the pinned-ring lie is GONE (hard rule 2), verified on hardware.
+## WIRE: INTRO v6 (+ u24 ruler), LAYOUT end byte = rows, config
+## area cols/rows (old grid key = silent 3x3 - see below). CLOSED
+## (2026-09-26 LATE): the PC web page followed to 3x4 (page
+## 00.000.013 in meshtech-phone + node v00.000.053); box config now
+## pins cols/rows 3x4. All three screens agree: 12 sections.
+
+
 ## SHIPPED (2026-09-25 LATER): CHANNEL CUTOVER #scope -> #meshtech,
 ## PROVISIONED BY THE APP ITSELF - PROVEN BOTH WAYS ON HARDWARE.
 ## app (UNCOMMITTED) = v00.000.022, 89 tests green, analyze clean,
@@ -40,8 +72,11 @@ old channel -> write + prove -> map, unanswerable radio -> map stays
 down with the honest line). MeshtechApp gained a mapBuilder test
 seam (the same one MainPage already had) so no map engine runs in
 the harness.
-QUEUE (Brett's go, none started): release-build map fix; answer-
-progress on Update; hilltop CAD-timeout hunt; manage.sh txmode bugs.
+QUEUE (Brett's go, none started): answer-progress on Update;
+manage.sh txmode bugs. (DONE 2026-09-26: hilltop CAD-timeout hunt -
+cleanmodem flag drift fixed, node v00.000.054. Release-build map
+fix - R8 renamed the JNI-bound PlatformView interface; keep rules in
+android/app/proguard-rules.pro, proven on the Pixel.)
 
 ## SHIPPED (2026-09-25): AIR REFRESH ROUND TRIP - PROVEN ON HARDWARE
 ## app dev 5f03ff9 = v00.000.019 (pushed, debug build on the Pixel);
