@@ -710,4 +710,73 @@ void main() {
         fake.writes.any((w) => w.isNotEmpty && w[0] == cmdSetChannel),
         isFalse);
   });
+
+  group('THE AIRTIME HEARTBEAT (Brett, 2026-09-26)', () {
+    Uint8List? heartbeatWrite(FakeBleTransport fake) {
+      for (final w in fake.writes.reversed) {
+        if (w.length == 5 + 5 && // [62][slot][0xff][type 2] + 5B header
+            w[0] == cmdSendChannelData &&
+            w[3] == 0x13 && w[4] == 0x53) {
+          return w;
+        }
+      }
+      return null;
+    }
+
+    test('the FIRST heartbeat flies once the slot is found', () async {
+      final fake = FakeBleTransport();
+      final logs = <String>[];
+      final link = buildLink(LinkEvents(onLog: logs.add), fake);
+      await link.connect();
+      expect(link.state, LinkState.connected);
+      // The slot probe needs the radio's answer before any uplink can
+      // wrap: the heartbeat retries until it lands (poll cadence).
+      fake.emit(channelInfo(2, 'meshtech', scopeSecret()));
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+
+      final hb = heartbeatWrite(fake);
+      expect(hb, isNotNull);
+      // [62][slot][0xff][13 53][05][seq 2][origin 2]
+      expect(hb![1], 2); // the discovered slot
+      expect(hb[5], 0x05); // proto version
+      expect(hb.length, 10);
+      expect(logs.any((l) => l.contains('scope uplink sent') &&
+          l.contains('type 0x5313')), isTrue);
+
+      link.disconnect();
+      await Future<void>.delayed(Duration.zero);
+    });
+
+    test('it repeats on the timer and STOPS at disconnect', () async {
+      final fake = FakeBleTransport();
+      final link = CompanionLink(
+        const LinkEvents(),
+        transportFactory: () => fake,
+        pollInterval: const Duration(milliseconds: 30),
+        slotProbeGap: const Duration(milliseconds: 5),
+        probeSummaryDelay: const Duration(milliseconds: 60),
+        retryPause: const Duration(milliseconds: 10),
+        heartbeatInterval: const Duration(milliseconds: 40),
+      );
+      await link.connect();
+      fake.emit(channelInfo(2, 'meshtech', scopeSecret()));
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      expect(heartbeatWrite(fake), isNotNull);   // the first one
+      fake.writes.clear();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(heartbeatWrite(fake), isNotNull,   // the timer keeps it up
+          reason: 'a 40 ms timer must have fired inside 100 ms');
+      final countAtStop = fake.writes
+          .where((w) => w.length == 10 && w[3] == 0x13 && w[4] == 0x53)
+          .length;
+      expect(countAtStop, greaterThanOrEqualTo(1));
+
+      link.disconnect();
+      await Future<void>.delayed(Duration.zero);
+      fake.writes.clear();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(heartbeatWrite(fake), isNull,
+          reason: 'the app left the air: no more keep-alives');
+    });
+  });
 }

@@ -31,6 +31,11 @@ const int protoVersionGone = 0x06;
 const int protoVersionIntro = 0x06; // INTRO: the ruler span, 3 LE bytes
 
 const int typeGone = 0x5312;
+// HEARTBEAT (0x5313, Brett's airtime rule 2026-09-26): the app's tiny
+// keep-alive - header only, NOTHING else. Its arrival on hilltop is
+// the whole message: a live app is listening. The node keeps its own
+// broadcasts flowing for 5 minutes after the last one heard.
+const int typeHeartbeat = 0x5313;
 const int maxGonePerPacket = 8;
 
 // data_type values (the 0x53 magic marks scope traffic).
@@ -861,6 +866,28 @@ Gone decodeGone(Uint8List body) {
 }
 
 // ---------------------------------------------------------------------------
+// HEARTBEAT (0x5313) - the app's keep-alive (Brett's airtime rule)
+// ---------------------------------------------------------------------------
+
+class Heartbeat {
+  final int seq;
+  final int origin;
+  const Heartbeat({required this.seq, this.origin = 0});
+}
+
+Uint8List encodeHeartbeat(Heartbeat h) {
+  // Header ONLY (5 bytes) inside the 3-byte envelope: 8 bytes of
+  // plaintext, the smallest packet the format can carry - nothing to
+  // decode wrong on either side.
+  return dataTypeBytes(typeHeartbeat, packHeader(h.seq, h.origin));
+}
+
+Heartbeat decodeHeartbeat(Uint8List body) {
+  final (header, _) = unpackHeader(body);
+  return Heartbeat(seq: header.seq, origin: header.origin);
+}
+
+// ---------------------------------------------------------------------------
 // Generic decode + helpers
 // ---------------------------------------------------------------------------
 
@@ -899,6 +926,8 @@ Object decodeBody(int dataType, Uint8List body) {
       return decodeRefreshReq(body);
     case typeGone:
       return decodeGone(body);
+    case typeHeartbeat:
+      return decodeHeartbeat(body);
     default:
       final hex = dataType.toRadixString(16).padLeft(6, '0');
       throw CodecError('unknown data_type 0x$hex');

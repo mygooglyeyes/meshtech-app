@@ -385,6 +385,18 @@ class CompanionLink implements Link {
   bool _retrying = false;
   BleTransport? _transport;
   CompanionProtocol? _proto;
+
+  /// THE AIRTIME HEARTBEAT (Brett's rule, 2026-09-26): while the app
+  /// is open, a tiny HEARTBEAT goes over the air right after the
+  /// companion link comes up, then every 2 minutes. Hilltop counts
+  /// these as "a live app is listening" and keeps its OWN broadcasts
+  /// flowing; 5 minutes of silence quiets the node. ~30 packets an
+  /// hour, 8 bytes each - the cost of an audible map.
+  final Duration heartbeatInterval;
+  Timer? _heartbeatTimer;
+  Timer? _heartbeatRetry;
+  bool _heartbeatLanded = false;
+  int _heartbeatSeq = 0;
   late final WireFeed _feed = WireFeed(
       pipe: 'air',
       onPacket: (packet, {heardMs}) =>
@@ -397,7 +409,8 @@ class CompanionLink implements Link {
       this.retryPause = const Duration(milliseconds: 1500),
       this.pollInterval = const Duration(seconds: 1),
       this.slotProbeGap = const Duration(milliseconds: 120),
-      this.probeSummaryDelay = const Duration(milliseconds: 1400)});
+      this.probeSummaryDelay = const Duration(milliseconds: 1400),
+      this.heartbeatInterval = const Duration(minutes: 2)});
 
   @override
   LinkState get state => _state;
@@ -494,6 +507,54 @@ class CompanionLink implements Link {
     _state = s;
     _detail = detail;
     events.onState?.call(s, detail);
+  }
+
+  /// Start (or restart) the 2-minute keep-alive. Called the moment
+  /// the companion link reports connected. The slot probe usually
+  /// settles AFTER connect returns, so the first attempt may be
+  /// refused - until one LANDS, it retries at the poll interval; then
+  /// the 2-minute timer holds the window open. A bounce-retry must
+  /// not double-send: everything is cancelled before it restarts.
+  void _startHeartbeat() {
+    _stopHeartbeat();
+    _heartbeatLanded = false;
+    unawaited(_sendHeartbeat());            // first sign: right now
+    _heartbeatTimer = Timer.periodic(heartbeatInterval,
+        (_) => unawaited(_sendHeartbeat()));
+  }
+
+  void _stopHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
+    _heartbeatRetry?.cancel();
+    _heartbeatRetry = null;
+  }
+
+  Future<void> _sendHeartbeat() async {
+    final proto = _proto;
+    if (proto == null || _state != LinkState.connected) return;
+    _heartbeatSeq = (_heartbeatSeq + 1) & 0xFFFF;
+    final wire = encodeHeartbeat(
+        Heartbeat(seq: _heartbeatSeq, origin: 0));
+    final ok = await proto.sendScope(wire);
+    if (ok) {
+      if (!_heartbeatLanded) {
+        _heartbeatLanded = true;
+        _log('heartbeat on the air - hilltop knows the app is '
+            'listening');
+      }
+    } else if (!_heartbeatLanded) {
+      // The slot probe is still settling (or the link bounced): try
+      // again at the poll cadence until the FIRST one lands - then
+      // the 2-minute timer holds the window.
+      _heartbeatRetry?.cancel();
+      _heartbeatRetry = Timer(pollInterval,
+          () => unawaited(_sendHeartbeat()));
+    } else {
+      // A missed keep-alive is normal on a bouncy BLE link (the
+      // node's window rides out it) - but it must SAY so.
+      _log('heartbeat not sent - the radio refused the uplink');
+    }
   }
 
   void _log(String line) => events.onLog?.call(line);
@@ -601,6 +662,7 @@ class CompanionLink implements Link {
       _setState(LinkState.connected, transport.name);
       _log('companion connected: ${transport.name} - receiving on the'
           ' air pipe');
+      _startHeartbeat();          // the app is on the air: say so
     } catch (err) {
       _wantRun = false;
       _retrying = false;
@@ -618,6 +680,7 @@ class CompanionLink implements Link {
   }
 
   Future<void> _teardown() async {
+    _stopHeartbeat();             // the app is leaving the air
     final proto = _proto;
     _proto = null;
     await proto?.stop();

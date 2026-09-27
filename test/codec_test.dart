@@ -265,7 +265,31 @@ void main() {
       expect(decoded.entries.single.lat, 0.0);
     });
   });
+
+  heartbeatTests();
 }
 
 /// A matcher for our own exception type (never a bare `throwsException`).
 final throwsCodecError = throwsA(isA<CodecError>());
+
+void heartbeatTests() {
+  group('HEARTBEAT (0x5313) - the app keep-alive', () {
+    test('header only: 8 plaintext bytes, the smallest packet', () {
+      final wire = encodeHeartbeat(const Heartbeat(seq: 42, origin: 0xb17e));
+      expect(wire.length, 8); // type(2)+len(1)+ver(1)+seq(2)+origin(2)
+      // Generic path (how traffic really arrives) routes it too.
+      final decoded = decodeAny(wire) as Heartbeat;
+      expect(decoded.seq, 42);
+      expect(decoded.origin, 0xb17e);
+      // Round-trip: the same bytes out the other side.
+      expect(hexOf(encodeHeartbeat(decoded)), hexOf(wire));
+    });
+    test('golden agreement with the node codec', () {
+      // The exact bytes the node's test pins for the same fields -
+      // type(2)+len(1)+ver(1)+seq(2)+origin(2): 13 53 05 05 2a 00 7e b1.
+      // The two repos stay byte-identical by construction.
+      expect(hexOf(encodeHeartbeat(const Heartbeat(seq: 42, origin: 0xb17e))),
+          '135305052a007eb1');
+    });
+  });
+}
