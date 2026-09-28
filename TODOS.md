@@ -29,6 +29,27 @@
 ## library is vendored or replaced. 029-031 chapters stay parked
 ## (persistence etc.) - say the word and they land too.
 
+## (previous) SHIPPED + PUSHED (2026-09-27): THE PERSISTENCE
+## CHAPTER - app v00.000.029 -> v00.000.031 (f29ad2e + b78e7ba on
+## dev, PUSHED, 115 tests green; release APK 031 built + installed
+## 19:33; phone test PASSED - 'the lines and nodes survived'
+## close/reopen, 2026-09-27). 029: the map frame (name, center,
+## grid shape) is RECEIVED DATA - it persists with the dots and is
+## fed by every LAYOUT; a fresh install waits for a real LAYOUT,
+## and a node-restart reset drops the frame from memory AND flash
+## (the test caught the saved stale frame trying to resurrect).
+## 031: route lines + their age anchors persist too, ages fold
+## forward across relaunch so the death clock ticks truthfully
+## while the app is closed; nodes get the same 7/14 law as routes
+## (stale 7 / dead 14, pruned at load); a GONE update removes the
+## dot AND its route lines ('the line follows the dot'); a node
+## restart removes NOTHING - the server persists its map
+## (write-through SQLite + boot refill, verified), so the phone
+## drops its sync marker and re-syncs fully. (030 left no commit -
+## the number skipped 029 -> 031.) Standing harness law: DEBUG
+## builds wipe store + clinic at launch; RELEASE persists (the
+## wipe gate opens after load).
+
 ## (previous) SHIPPED + PUSHED (2026-09-26 LATE NIGHT): THE AIRTIME HEARTBEAT -
 ## app v00.000.028 (dafbcd4 on dev, analyze clean, 105 tests green)
 ## + node v00.000.058 (191d13b, DEPLOYED on hilltop). Brett's airtime
