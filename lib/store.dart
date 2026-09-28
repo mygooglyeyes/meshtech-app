@@ -84,19 +84,26 @@ class NodeStore {
 
   static const _persistKey = 'node_store';
   static const _markerKey = 'sync_marker';
+  static const _routesKey = 'route_store';
   // THE MAP FRAME SURVIVES RESTARTS (Brett, 2026-09-27): the lines
   // (name + center + shape) are RECEIVED DATA - closing the app must
   // not lose them, the same law the dots already follow.
   static const _frameKey = 'map_frame';
   Layout? _frame;
+  // The age anchor per route: the epoch ms the wire answer arrived.
+  // Ages fold forward from it on reload so the death clock keeps
+  // ticking TRUTHFULLY while the app is closed (Brett's law:
+  // persistence never freezes time).
+  final Map<int, int> _routeHeardAt = {};
 
   Map<int, NodeRecord> get nodes => Map.unmodifiable(_nodes);
   int get syncMarker => _syncMarker;
   List<int> get gonePending => List.unmodifiable(_gonePending);
 
   /// The heard map frame (what the lines draw from). Null on a fresh
-  /// install or after a node restart - the app then waits for a real
-  /// LAYOUT, never draws stale lines.
+  /// install - the app then waits for a real LAYOUT, never draws
+  /// stale lines. (A node restart no longer clears it: the frame is
+  /// replaced like-for-like by the re-sync's fresh LAYOUT.)
   Layout? get frame => _frame;
 
   /// A LAYOUT landed (either pipe): it IS the frame now. UPSERT-
@@ -134,6 +141,21 @@ class NodeStore {
     return existed;
   }
 
+  /// A GONE notice also kills the dead node's routes (its lines are
+  /// lines TO it - with the dot gone they are fiction). Returns the
+  /// route ids removed, so the caller can repaint only if needed.
+  List<int> removeGoneRoutes(int prefix) {
+    final dropped = [
+      for (final r in _routes.values)
+        if (r.prefixes.contains(prefix & 0xFF)) r.routeId,
+    ];
+    for (final id in dropped) {
+      _routes.remove(id);
+      _routeHeardAt.remove(id);
+    }
+    return dropped;
+  }
+
   /// After the UI has redrawn: acknowledge the gone batch.
   void clearGonePending() => _gonePending.clear();
 
@@ -150,6 +172,19 @@ class NodeStore {
     await sp.setString(_persistKey,
         jsonEncode([for (final n in _nodes.values) n.toJson()]));
     await sp.setInt(_markerKey, _syncMarker);
+    // ROUTES PERSIST TOO (Brett's law, 2026-09-27): the lines are
+    // received data - the app must come up just like it shut down.
+    // Each route saves its age anchor so reload folds the CLOSED
+    // time into its age honestly.
+    await sp.setString(
+        _routesKey,
+        jsonEncode([
+          for (final r in _routes.values)
+            {
+              'r': _routeJson(r),
+              'h': _routeHeardAt[r.routeId],
+            }
+        ]));
     final f = _frame;
     if (f != null) {
       await sp.setString(
@@ -198,7 +233,52 @@ class NodeStore {
         name: j['name'] as String? ?? '',
       );
     }
+    final rr = sp.getString(_routesKey);
+    if (rr != null) {
+      _routes
+        ..clear()
+        ..addEntries([
+          for (final j in jsonDecode(rr) as List)
+            if (j is Map<String, Object?>)
+              MapEntry(_routeFromJson((j['r'] as Map).cast<String, Object?>())
+                  .routeId, _routeFromJson((j['r'] as Map).cast<String, Object?>()))
+        ]);
+      // Anchors second pass (the map above decodes each row twice -
+      // cheap and honest; the anchors ride along separately).
+      for (final j in jsonDecode(rr) as List) {
+        if (j is! Map<String, Object?>) continue;
+        final rid = ((j['r'] as Map)['rid'] as num).toInt();
+        final h = (j['h'] as num?)?.toInt();
+        if (h != null && _routes.containsKey(rid)) _routeHeardAt[rid] = h;
+      }
+    }
+    // THE DEATH LAW AT LAUNCH: the closed time counts - anything that
+    // died while the app was shut is gone the moment it reopens
+    // (honest, not frozen).
+    pruneDead();
   }
+
+  static Map<String, Object?> _routeJson(Route r) => {
+        'seq': r.seq,
+        'sid': r.sectionId,
+        'rid': r.routeId,
+        'n': r.packetCount,
+        'd': r.delayMedS,
+        'age': r.lastHeardMin,
+        'o': r.origin,
+        'p': r.prefixes,
+      };
+
+  static Route _routeFromJson(Map<String, Object?> j) => Route(
+        seq: (j['seq'] as num).toInt(),
+        sectionId: (j['sid'] as num).toInt(),
+        routeId: (j['rid'] as num).toInt(),
+        packetCount: (j['n'] as num).toInt(),
+        delayMedS: (j['d'] as num).toInt(),
+        lastHeardMin: (j['age'] as num).toInt(),
+        origin: (j['o'] as num?)?.toInt() ?? 0,
+        prefixes: List<int>.from(j['p'] as List),
+      );
 
   /// ROUTES (design section 10): the answer to a tap-ask. Keyed by
   /// the wire's route_id; UPSERT-REPLACE like everything else - the
@@ -222,25 +302,87 @@ class NodeStore {
       ? directDeadAfterMin
       : multihopDeadAfterMin;
 
-  void applyRoute(Route r) {
+  void applyRoute(Route r, {int? heardMs}) {
     // lastHeardMin rides the wire as the route's age in minutes.
     if (r.lastHeardMin > routeDeadAfterMin(r)) return; // DEAD: drop it
     _routes[r.routeId] = r;
+    _routeHeardAt[r.routeId] =
+        heardMs ?? DateTime.now().millisecondsSinceEpoch;
   }
 
   Route? route(int routeId) => _routes[routeId];
 
   Iterable<Route> get routes => _routes.values;
 
-  /// Forget everything (the node restarted and its seq regressed -
-  /// the phone's view is stale; a fresh LAYOUT redraws it). The FRAME
-  /// goes too: the node's RAM map frame died with it, so the old
-  /// lines are no longer the truth (honest blank until it sends a
-  /// fresh one).
+  /// NODE DEATH LAW (Brett, 2026-09-27): the same lines the routes
+  /// live on - a node silent 7 days is STALE (shown honestly), 14
+  /// days DEAD (removed). Removal ways: dead, or a GONE update from
+  /// any source. Nothing else ever deletes a dot.
+  static const nodeStaleAfterMin = 7 * 1440;
+  static const nodeDeadAfterMin = 14 * 1440;
+
+  bool nodeIsStale(NodeRecord n, {int? nowMs}) {
+    final now = nowMs ?? DateTime.now().millisecondsSinceEpoch;
+    return now - n.lastHeardMs > nodeStaleAfterMin * 60000;
+  }
+
+  bool nodeIsDead(NodeRecord n, {int? nowMs}) {
+    final now = nowMs ?? DateTime.now().millisecondsSinceEpoch;
+    return now - n.lastHeardMs > nodeDeadAfterMin * 60000;
+  }
+
+  /// Drop dead dots and dead routes (the death law, enforced while
+  /// running - load() prunes at launch too). Returns what changed so
+  /// the caller only redraws on a real removal.
+  int pruneDead({int? nowMs}) {
+    final now = nowMs ?? DateTime.now().millisecondsSinceEpoch;
+    var removed = 0;
+    final deadNodes = [
+      for (final n in _nodes.values)
+        if (now - n.lastHeardMs > nodeDeadAfterMin * 60000) n.prefix,
+    ];
+    for (final p in deadNodes) {
+      _nodes.remove(p);
+      removed++;
+    }
+    final deadRoutes = [
+      for (final r in _routes.values)
+        if (_routeAgeMin(r, nowMs: now) > routeDeadAfterMin(r)) r.routeId,
+    ];
+    for (final id in deadRoutes) {
+      _routes.remove(id);
+      _routeHeardAt.remove(id);
+      removed++;
+    }
+    return removed;
+  }
+
+  /// A route's HONEST age: wire age + the minutes that really passed
+  /// since this phone heard it (the anchor never resets - persistence
+  /// does not freeze time).
+  int _routeAgeMin(Route r, {int? nowMs}) {
+    final heardAt = _routeHeardAt[r.routeId];
+    if (heardAt == null) return r.lastHeardMin;
+    final now = nowMs ?? DateTime.now().millisecondsSinceEpoch;
+    return r.lastHeardMin + ((now - heardAt) / 60000).floor();
+  }
+
+  /// NODE RESTART (Brett's law, 2026-09-27): a restart removes
+  /// NOTHING - the server persists its map on disk, so the phone
+  /// keeps every dot, line and the frame, and re-syncs fully by
+  /// dropping its sync marker (marker 0 = the whole roster re-sent;
+  /// the fresh LAYOUT replaces the frame like-for-like).
+  void prepareResync() {
+    _syncMarker = 0;
+  }
+
+  /// THE FULL WIPE (debug bench / first run ONLY - never a node
+  /// restart; see prepareResync). Everything goes, memory and flash.
   void resetAll() {
     _nodes.clear();
     _gonePending.clear();
     _routes.clear();
+    _routeHeardAt.clear();
     _frame = null;
   }
 
@@ -258,5 +400,6 @@ class NodeStore {
     await sp.remove(_persistKey);
     await sp.remove(_markerKey);
     await sp.remove(_frameKey);
+    await sp.remove(_routesKey);
   }
 }

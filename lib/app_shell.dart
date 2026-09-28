@@ -137,7 +137,19 @@ class _MeshtechAppState extends State<MeshtechApp> {
       }),
       onPacket: (packet, {heardMs}) => _onPacket(packet, heardMs),
       onLog: _logLine,
-      onReset: () => _store.resetAll(),
+      onReset: () {
+        // NODE RESTART IS NOT DEATH (Brett's law, 2026-09-27): the
+        // server persists its map on disk, so the phone keeps every
+        // dot, line and the frame. Full re-sync instead: the marker
+        // drops (marker 0 = the whole roster re-sent) and the fresh
+        // LAYOUT replaces the frame like-for-like. The store saves
+        // immediately - a crash here must not resurrect the old
+        // marker with stale data.
+        _store.prepareResync();
+        _store.save().then((_) => SettingsStore()
+            .save(_settings.copyWith(syncMarker: _store.syncMarker)));
+        _logLine('node restarted - the map stays, a full re-sync begins');
+      },
     );
     _airEvents = LinkEvents(
       onState: (s, d) {
@@ -382,6 +394,12 @@ class _MeshtechAppState extends State<MeshtechApp> {
         _frameName = f.name;
         _frameCenter = (f.centerLat, f.centerLon);
       }
+      // RELEASE MUST SAVE TOO (the lines bug, Brett's phone test
+        // 2026-09-27): the wipe gate existed only for the DEBUG wipe -
+        // in release it NEVER opened, so no release install has
+        // persisted anything since the gate was born. Open it here:
+        // loading is done, the flash holds what the store loaded.
+      _wipeGate = false;
     }
     setState(() {
       _settings = loaded;
@@ -417,6 +435,10 @@ class _MeshtechAppState extends State<MeshtechApp> {
       case final Gone g:
         for (final p in g.prefixes) {
           _store.removeGone(p);
+          // THE LINE FOLLOWS THE DOT (Brett, 2026-09-27): a GONE
+          // update removes the node's route lines too - they are
+          // lines TO it, fiction without the dot.
+          _store.removeGoneRoutes(p);
         }
       case final Pulse pl:
         _pulse = pl; // feed-health box (section: the web app's furniture)
