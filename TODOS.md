@@ -1,6 +1,35 @@
 # meshtech-app - TODOS (order matters, top first)
 
-## SHIPPED + PUSHED (2026-09-26 LATE NIGHT): THE AIRTIME HEARTBEAT -
+## SHIPPED + PUSHED (2026-09-28): THE MESH CLINIC CHAPTER - app
+## v00.000.032 (461b766 on dev + docs 614056c, PUSHED, 165 tests
+## green, analyze clean) + node v00.000.062 (4d1b794, PRs #1/#2,
+## DEPLOYED on hilltop 060 -> 062). THE FIVE FACT-FAMILY VIEWS
+## (Brett's pick): ONE map, clinic layer on top - every fact a ring
+## or line colored by its state (fresh blue / aging yellow / trouble
+## red / second-hand teal) and labeled FIRST-HAND or SECOND-HAND by
+## who measured it (never merged - disagreement preserved). Chips:
+## All facts / Node health / Route health / Trouble flags /
+## Second-hand. Tap any clinic ring/line -> card with the fact, its
+## age and its provenance. Clinic facts fold from heard CLINIC
+## bursts (0x5314, <= 7 records per batch, rotating cursor) keyed
+## per (fact, box) - newest receipt replaces older; removal only by
+## age (30 d / 7 / 14) or GONE (chart + flags + peer INTROs die
+## with the node, peer ROUTE reports survive). COMPANION LINK
+## EQUAL: USB (115200 8N1, DTR/RTS per the SDK) + WiFi (host[:port],
+## default 5000) join BLE; stream framing on USB/TCP per the meshcore
+## SDK ('<'/'>' + u16 LE len). BENCH PASS 2026-09-28 (see
+## BENCH-REPORT.md): views PASS, tap cards PASS (provenance
+## 'first-hand box 2f25' live), USB leg NOT TESTED (companion radios
+## are flashed per connection type - bench Heltec is not a USB
+## companion; skipped by agreement). Counts bounce = the feed fills
+## live (rotating batches), not facts dying. Release APK built +
+## installed on the Pixel. BUILD NOTE: usb_serial 0.5.2's android
+## build code is dead on Gradle 9 - patched LOCALLY in this PC's
+## pub cache only; a fresh PC needs the same patch until the
+## library is vendored or replaced. 029-031 chapters stay parked
+## (persistence etc.) - say the word and they land too.
+
+## (previous) SHIPPED + PUSHED (2026-09-26 LATE NIGHT): THE AIRTIME HEARTBEAT -
 ## app v00.000.028 (dafbcd4 on dev, analyze clean, 105 tests green)
 ## + node v00.000.058 (191d13b, DEPLOYED on hilltop). Brett's airtime
 ## rule, both halves: the app sends a tiny HEARTBEAT (0x5313, 8
