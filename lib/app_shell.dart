@@ -372,6 +372,16 @@ class _MeshtechAppState extends State<MeshtechApp> {
     } else {
       _store.noteSyncMarker(loaded.syncMarker);
       await _store.load();
+      // THE LINES SURVIVE A RESTART (Brett, 2026-09-27): the saved map
+      // frame comes back with the dots - the map draws its grid
+      // immediately, no TCP trip needed. A node restart still clears
+      // it (resetAll) and a fresh install has none: the app then
+      // waits for a real LAYOUT, never draws stale lines.
+      final f = _store.frame;
+      if (f != null) {
+        _frameName = f.name;
+        _frameCenter = (f.centerLat, f.centerLon);
+      }
     }
     setState(() {
       _settings = loaded;
@@ -390,6 +400,10 @@ class _MeshtechAppState extends State<MeshtechApp> {
     final now = heardMs ?? DateTime.now().millisecondsSinceEpoch;
     switch (packet) {
       case final Layout l:
+        // The layout is RECEIVED DATA: into the store's frame so the
+        // debounced save persists it with the dots (the lines survive
+        // the app closing - Brett's fix, 2026-09-27).
+        _store.noteFrame(l);
         _safeSetState(() {
           _frameName = l.name;
           _frameCenter = (l.centerLat, l.centerLon);

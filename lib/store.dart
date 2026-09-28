@@ -84,10 +84,24 @@ class NodeStore {
 
   static const _persistKey = 'node_store';
   static const _markerKey = 'sync_marker';
+  // THE MAP FRAME SURVIVES RESTARTS (Brett, 2026-09-27): the lines
+  // (name + center + shape) are RECEIVED DATA - closing the app must
+  // not lose them, the same law the dots already follow.
+  static const _frameKey = 'map_frame';
+  Layout? _frame;
 
   Map<int, NodeRecord> get nodes => Map.unmodifiable(_nodes);
   int get syncMarker => _syncMarker;
   List<int> get gonePending => List.unmodifiable(_gonePending);
+
+  /// The heard map frame (what the lines draw from). Null on a fresh
+  /// install or after a node restart - the app then waits for a real
+  /// LAYOUT, never draws stale lines.
+  Layout? get frame => _frame;
+
+  /// A LAYOUT landed (either pipe): it IS the frame now. UPSERT-
+  /// REPLACE like every other fact - the newest layout wins whole.
+  void noteFrame(Layout l) => _frame = l;
 
   /// UPSERT-REPLACE (Brett's law): the new record REPLACES the old
   /// facts wholesale - a moved node's old position is gone the moment
@@ -136,19 +150,54 @@ class NodeStore {
     await sp.setString(_persistKey,
         jsonEncode([for (final n in _nodes.values) n.toJson()]));
     await sp.setInt(_markerKey, _syncMarker);
+    final f = _frame;
+    if (f != null) {
+      await sp.setString(
+          _frameKey,
+          jsonEncode({
+            'seq': f.seq,
+            'grid': f.grid,
+            'rows': f.rows,
+            'centerLat': f.centerLat,
+            'centerLon': f.centerLon,
+            'spanM': f.spanM,
+            'origin': f.origin,
+            'name': f.name,
+          }));
+    } else {
+      // Null truth erases the saved frame: after a node-restart reset
+      // the flash must not hold the dead frame either (a reload would
+      // resurrect stale lines - the exact bug this fixes).
+      await sp.remove(_frameKey);
+    }
   }
 
   Future<void> load() async {
     final sp = await SharedPreferences.getInstance();
     _syncMarker = sp.getInt(_markerKey) ?? 0;
     final raw = sp.getString(_persistKey);
-    if (raw == null) return;
-    final list = jsonDecode(raw) as List;
-    _nodes
-      ..clear()
-      ..addEntries([for (final j in list)
-        MapEntry((j as Map<String, Object?>)['p'] as int,
-            NodeRecord.fromJson(j.cast<String, Object?>()))]);
+    if (raw != null) {
+      final list = jsonDecode(raw) as List;
+      _nodes
+        ..clear()
+        ..addEntries([for (final j in list)
+          MapEntry((j as Map<String, Object?>)['p'] as int,
+              NodeRecord.fromJson(j.cast<String, Object?>()))]);
+    }
+    final fr = sp.getString(_frameKey);
+    if (fr != null) {
+      final j = jsonDecode(fr) as Map<String, Object?>;
+      _frame = Layout(
+        seq: (j['seq'] as num).toInt(),
+        grid: (j['grid'] as num).toInt(),
+        rows: (j['rows'] as num).toInt(),
+        centerLat: (j['centerLat'] as num).toDouble(),
+        centerLon: (j['centerLon'] as num).toDouble(),
+        spanM: (j['spanM'] as num).toInt(),
+        origin: (j['origin'] as num).toInt(),
+        name: j['name'] as String? ?? '',
+      );
+    }
   }
 
   /// ROUTES (design section 10): the answer to a tap-ask. Keyed by
@@ -184,11 +233,15 @@ class NodeStore {
   Iterable<Route> get routes => _routes.values;
 
   /// Forget everything (the node restarted and its seq regressed -
-  /// the phone's view is stale; a fresh LAYOUT redraws it).
+  /// the phone's view is stale; a fresh LAYOUT redraws it). The FRAME
+  /// goes too: the node's RAM map frame died with it, so the old
+  /// lines are no longer the truth (honest blank until it sends a
+  /// fresh one).
   void resetAll() {
     _nodes.clear();
     _gonePending.clear();
     _routes.clear();
+    _frame = null;
   }
 
   /// FRESH-INSTALL WIPE (Brett's bench law, 2026-09-24): a DEBUG
@@ -204,5 +257,6 @@ class NodeStore {
     final sp = await SharedPreferences.getInstance();
     await sp.remove(_persistKey);
     await sp.remove(_markerKey);
+    await sp.remove(_frameKey);
   }
 }
