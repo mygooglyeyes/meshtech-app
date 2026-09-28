@@ -1,8 +1,9 @@
 // THE 4-WAY LINK SELECTOR (Brett 2026-09-25): four chips - BLE / USB
 // / WiFi / TCP. Laws pinned here: nothing connects on its own (the
 // Connect button is unpressable until a chip is chosen), a press acts
-// for THAT chip alone (BLE goes through the companion link, never the
-// door), and the not-yet-built chips say so in plain words instead of
+// for THAT chip alone (the companion link is EQUAL on BLE / USB /
+// WiFi - Mesh Clinic v2 - and NONE of them ever touches the door),
+// and an unwired transport says so in plain words instead of
 // pretending.
 
 import 'dart:typed_data';
@@ -109,7 +110,7 @@ void main() {
     expect(status.data, startsWith('Radio: '));
   });
 
-  testWidgets('the USB chip is honest: not built yet, door untouched',
+  testWidgets('the USB chip dials the COMPANION - never the door',
       (tester) async {
     await pumpApp(tester);
     await tester.tap(find.widgetWithText(ChoiceChip, 'USB'));
@@ -117,20 +118,35 @@ void main() {
     await tester.tap(find.byType(FilledButton));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('USB link: not built yet'), findsWidgets);
+    // The door was NEVER dialed (USB is not TCP).
     expect(RecordingSocket.lastUrl, isNull);
+    // No USB is wired in tests: the companion link says so in plain
+    // words (the same honest-refusal law as BLE) instead of pretending.
+    expect(find.textContaining('USB transport wired'), findsWidgets);
   });
 
-  testWidgets('the WiFi chip is honest too (it is NOT the TCP door)',
+  testWidgets(
+      'the WiFi chip is a companion over the network - NOT the TCP door',
       (tester) async {
     await pumpApp(tester);
     await tester.tap(find.widgetWithText(ChoiceChip, 'WiFi'));
     await tester.pumpAndSettle();
+    // No address yet: said plainly on screen, nothing dialed at all.
     await tester.tap(find.byType(FilledButton));
     await tester.pumpAndSettle();
-
-    expect(find.textContaining('WiFi link: not built yet'), findsWidgets);
+    expect(find.textContaining('companion address'), findsWidgets);
     expect(RecordingSocket.lastUrl, isNull);
+
+    // With an address it dials the NETWORK COMPANION - and STILL
+    // never the door (WiFi on this selector is not the door).
+    await tester.enterText(find.widgetWithText(TextField, 'Companion address'),
+        '192.168.12.9:5000');
+    await tester.tap(find.byType(FilledButton));
+    await tester.pumpAndSettle();
+    expect(RecordingSocket.lastUrl, isNull);
+    expect(
+        find.textContaining('network companion transport wired'),
+        findsWidgets);
   });
 
   testWidgets('a TCP press still dials the door (the test path)', //

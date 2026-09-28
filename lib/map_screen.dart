@@ -19,6 +19,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:maplibre/maplibre.dart';
 
+import 'clinic_store.dart';
 import 'map_model.dart';
 import 'settings.dart';
 import 'store.dart';
@@ -31,6 +32,11 @@ const mapStyleUrl =
 
 class MapScreen extends StatefulWidget {
   final NodeStore store;
+
+  /// THE CLINIC (Mesh Clinic v2): the store's clinic facts - the
+  /// simple health layer, its five fact-family views and the tap-
+  /// detail cards draw from here (never from anywhere else).
+  final ClinicStore clinic;
   final ConnectionSettings settings;
   final (double, double)? frameCenter;
   final VoidCallback onAsk; // THE UPDATE BUTTON: the phone asks, over the door
@@ -44,6 +50,7 @@ class MapScreen extends StatefulWidget {
   const MapScreen({
     super.key,
     required this.store,
+    required this.clinic,
     required this.settings,
     this.frameCenter,
     required this.onAsk,
@@ -59,6 +66,18 @@ class _MapScreenState extends State<MapScreen> {
   MapController? _map;
   ViewGrid? _grid; // THE PHONE'S 3x4 VIEW GRID on the visible region
   int _overlayTick = 0; // bumped = labels/grid recompute their spots
+
+  /// THE CLINIC VIEW (Brett's pick): which fact family the simple
+  /// health layer draws - all facts / node health / route health /
+  /// trouble flags / second-hand peer reports. Switching views only
+  /// changes the DRAWING (rule 2) - never an ask, never a removal.
+  ClinicView _clinicView = ClinicView.all;
+  ClinicLayer? _clinicLayer; // last build's layer (tap targeting)
+
+  /// The tap's tolerance as a FINGER'S WIDTH on the tall map: a
+  /// fraction of the visible window (the size selector couples zoom
+  /// to window, so this lands near-constant on screen).
+  static const clinicTapFraction = 0.05;
 
   /// BRETT'S ROUTE-LINE TOGGLE (2026-09-25): the PAST route lines
   /// (what the store holds) show/hide. Not saved - a fresh launch
@@ -111,6 +130,40 @@ class _MapScreenState extends State<MapScreen> {
   Widget build(BuildContext context) {
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final dots = MapViewModel.dots(widget.store, nowMs: nowMs);
+    // THE CLINIC LAYER (Mesh Clinic v2): one ring per drawn fact,
+    // colored by its honest state (fresh blue / aging yellow /
+    // trouble red / second-hand teal). A second-hand fact NEVER
+    // wears a first-hand color (CLINIC-WIRE provenance rule), and a
+    // fact with no place draws nowhere - counted out loud below.
+    final clinic =
+        ClinicLayerVM.build(widget.clinic, widget.store, _clinicView,
+            nowMs: nowMs);
+    _clinicLayer = clinic; // tap targeting reads it between builds
+    List<Feature<Point>> clinicDots(ClinicColor c) => [
+          for (final m in clinic.markers)
+            if (m.color == c)
+              Feature(geometry: Point(Geographic(lon: m.lon, lat: m.lat))),
+        ];
+    List<Feature<LineString>> clinicLines(ClinicColor c) => [
+          for (final l in clinic.lines)
+            if (l.color == c)
+              for (final seg in l.segs)
+                Feature(
+                  geometry: LineString([for (final p in seg) ...[p.$1, p.$2]]
+                      .positions(Coords.xy)),
+                ),
+        ];
+    const clinicColors = [
+      (ClinicColor.fresh, Color(0xFF4A90D9)),
+      (ClinicColor.aging, Color(0xFFF5C518)),
+      (ClinicColor.trouble, Color(0xFFE53935)),
+      (ClinicColor.secondHand, Color(0xFF26A69A)),
+    ];
+    const clinicLineColors = [
+      (ClinicColor.fresh, Color(0xFF4A90D9)),
+      (ClinicColor.aging, Color(0xFFF5C518)),
+      (ClinicColor.secondHand, Color(0xFF26A69A)),
+    ];
     final s = widget.settings;
     // The grid's per-cell counts, computed ONCE per build.
     final cellCounts = _grid?.counts(widget.store);
@@ -178,6 +231,22 @@ class _MapScreenState extends State<MapScreen> {
                     // the section with that number - what he sees is
                     // what he taps, never re-derived from geography.
                     if (e is MapEventClick && _grid != null) {
+                      // THE CLINIC TAP (Mesh Clinic v2): a tap ON a
+                      // clinic fact opens its detail card - every
+                      // line labeled first-hand/second-hand. A tap
+                      // anywhere else opens the square's section:
+                      // the section law, unchanged.
+                      final layer = _clinicLayer;
+                      if (layer != null) {
+                        final hit = ClinicLayerVM.hitTest(
+                            layer,
+                            (e.point.lon, e.point.lat),
+                            _grid!.spanLatM * clinicTapFraction);
+                        if (hit != null) {
+                          _showClinicCard(hit);
+                          return;
+                        }
+                      }
                       final i = _grid!.cellIndex(e.point.lat, e.point.lon);
                       if (i >= 0) widget.onSectionTap?.call(_grid!.cell(i));
                     }
@@ -240,6 +309,24 @@ class _MapScreenState extends State<MapScreen> {
                         color: const Color(0x664A90D9),
                         width: 1,
                       ),
+                    // THE CLINIC LAYER draws ON TOP (the simple
+                    // health layer): rings per fact + its lines.
+                    for (final (c, col) in clinicColors)
+                      if (clinicDots(c).isNotEmpty)
+                        CircleLayer(
+                          points: clinicDots(c),
+                          radius: c == ClinicColor.trouble ? 9 : 8,
+                          color: col,
+                          strokeColor: const Color(0xFFFFFFFF),
+                          strokeWidth: 2,
+                        ),
+                    for (final (c, col) in clinicLineColors)
+                      if (clinicLines(c).isNotEmpty)
+                        PolylineLayer(
+                          polylines: clinicLines(c),
+                          color: col,
+                          width: 3,
+                        ),
                   ],
                   // Names on the map, every screen (section 8):
                   // "Hilltop ab" - name + pubkey head. The cell-count
@@ -312,6 +399,28 @@ class _MapScreenState extends State<MapScreen> {
                               ),
                         ],
                       ),
+                    WidgetLayer(
+                      // THE PEER CLAIMS (Mesh Clinic v2): the only
+                      // clinic labels - a claim drawn where the peer
+                      // SAID it is, wearing its '2nd' tag where
+                      // nothing else names the spot. Everywhere else
+                      // the base labels already name the node.
+                      key: ValueKey('claims-$_overlayTick'),
+                      markers: [
+                        for (final m in clinic.markers)
+                          if (m.claim)
+                            Marker(
+                              point: Geographic(lon: m.lon, lat: m.lat),
+                              size: const Size(120, 24),
+                              alignment: Alignment.bottomCenter,
+                              child: Text(
+                                m.label,
+                                style: const TextStyle(
+                                    fontSize: 11, color: Colors.black87),
+                              ),
+                            ),
+                      ],
+                    ),
                     WidgetLayer(
                       // NO NODE TAPS ON THE MAIN MAP (Brett,
                       // 2026-09-25): the layer's default
@@ -415,6 +524,33 @@ class _MapScreenState extends State<MapScreen> {
               ],
             ),
           ),
+          // THE CLINIC VIEWS (Mesh Clinic v2, Brett's pick): the
+          // five fact-family views on the ONE map. Switching a view
+          // redraws ONLY (rule 2) - no ask, no spend.
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Row(
+              children: [
+                for (final (view, name) in const [
+                  (ClinicView.all, 'All facts'),
+                  (ClinicView.nodes, 'Node health'),
+                  (ClinicView.routes, 'Route health'),
+                  (ClinicView.trouble, 'Trouble flags'),
+                  (ClinicView.secondHand, 'Second-hand'),
+                ])
+                  Padding(
+                    padding: const EdgeInsets.only(right: 4),
+                    child: ChoiceChip(
+                      label: Text(name,
+                          style: const TextStyle(fontSize: 11)),
+                      selected: _clinicView == view,
+                      onSelected: (_) => setState(() => _clinicView = view),
+                    ),
+                  ),
+              ],
+            ),
+          ),
           // THE MAP'S OWN STATS LINE: dots held and stale count.
           // (Feed health and the log live in the main page's own
           // sections; the tap-ask counter left with the tap-ask.)
@@ -426,7 +562,63 @@ class _MapScreenState extends State<MapScreen> {
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ),
+          // THE CLINIC STRIP: what the layer drew and what has no
+          // place - the honest gap, said out loud (never invented).
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Text(
+              '${clinic.markers.length + clinic.lines.length} clinic fact(s) '
+              'drawn - ${clinic.secondHandDrawn} second-hand'
+              '${clinic.unpositioned > 0 ? ' - ${clinic.unpositioned} without a place' : ''}',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+          if (clinic.unpositioned > 0)
+            TextButton(
+              onPressed: () => _openCardSheet(
+                  ClinicCards.looseCard(widget.clinic, nowMs: nowMs)),
+              child: Text(
+                'read the ${clinic.unpositioned} fact(s) without a place',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
         ],
+      ),
+    );
+  }
+
+  /// A tap on a clinic fact opens its detail card: one line per
+  /// fact, EVERY line labeled first-hand/second-hand (the plan).
+  void _showClinicCard(ClinicTarget target) {
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final lines = switch (target) {
+      ClinicNodeTarget(:final prefix) =>
+        ClinicCards.nodeCard(widget.clinic, widget.store, prefix,
+            nowMs: nowMs),
+      ClinicRouteTarget(:final path) =>
+        ClinicCards.routeCard(widget.clinic, path, nowMs: nowMs),
+    };
+    _openCardSheet(lines);
+  }
+
+  void _openCardSheet(List<String> lines) {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.all(16),
+          children: [
+            Text(lines.first, style: Theme.of(ctx).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            for (final line in lines.skip(1))
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(line,
+                    style: Theme.of(ctx).textTheme.bodySmall),
+              ),
+          ],
+        ),
       ),
     );
   }

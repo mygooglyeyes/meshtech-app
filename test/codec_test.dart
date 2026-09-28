@@ -31,6 +31,12 @@ const Map<String, String> golden = {
   // refresh: regenerated 2026-09-24 with the reference (v1.6 REFRESH_REQ:
   // version 06, +2 bytes sync_marker 0000 - the one wire change).
   'refresh': '115310060200420002efbe7eb1341200000000',
+  // clinic: the Mesh Clinic packet (CLINIC-WIRE.md) - 4 records
+  // (node / route / flag / peer-pulse). Generated with the node's
+  // tools/gen_golden.py: the two repos' goldens stay pinned to the
+  // same bytes (tests/golden_vectors.json "clinic").
+  'clinic':
+      '14534f0513017eb10401147eb12103000500070080022514240410a6b09c0a02127eb102112238000002000400090011000200030c7eb1022102001e000500f401040fefbe0100000400d204040028000900',
 };
 
 Uint8List bytesOf(String hex) => Uint8List.fromList([
@@ -267,6 +273,205 @@ void main() {
   });
 
   heartbeatTests();
+  clinicTests();
+}
+
+/// CLINIC (0x5314) golden + boundary tests - byte-parity with the
+/// node codec, and loud refusals wherever the wire page demands them.
+void clinicTests() {
+  group('CLINIC golden vector', () {
+    test('decodes to the reference fields and re-encodes byte-identical',
+        () {
+      final c = decodeGolden<Clinic>(golden['clinic']!);
+      expect(c.seq, 275);
+      expect(c.origin, 0xb17e);
+      expect(c.records.length, 4);
+
+      final n = c.records[0] as ClinicNodeFact;
+      expect(n.source, 0xb17e); // source == origin: first-hand
+      expect(n.prefix, 0x21);
+      expect(n.lastAgeMin, 3);
+      expect(n.ageDays, 5);
+      expect(n.strip, 0x800007);
+      expect(n.hopsTyp, 2);
+      expect(n.sharePct, 37);
+      expect(n.snrEwma, 20);
+      expect(n.snrBest, 36);
+      expect(n.snrWorst, 4);
+      expect(n.snrSd, 16);
+      expect(n.rssiEwma, -90);
+      expect(n.rssiBest, -80);
+      expect(n.rssiWorst, -100);
+      expect(n.rssiSd, 10);
+
+      final r = c.records[1] as ClinicRouteFact;
+      expect(r.source, 0xb17e);
+      expect(r.path, [0x11, 0x22]);
+      expect(r.uses, 56);
+      expect(r.direct, 0);
+      expect(r.delayMinS, 2);
+      expect(r.delayMedS, 4);
+      expect(r.delayMaxS, 9);
+      expect(r.lastAgeMin, 17);
+      expect(r.ageDays, 2);
+
+      final f = c.records[2] as ClinicFlagFact;
+      expect(f.source, 0xb17e);
+      expect(f.flag, flagTsBackwards);
+      expect(f.subject, 0x21);
+      expect(f.events, 2);
+      expect(f.firstAgeMin, 30);
+      expect(f.lastAgeMin, 5);
+      expect(f.detail, 500);
+
+      final p = c.records[3] as ClinicPeerFact;
+      expect(p.source, 0xbeef); // source != origin: second-hand
+      expect(p.report, reportPulse);
+      expect(p.subject, 0);
+      expect(p.heardAgeMin, 4);
+      expect(p.values, [1234, 4, 40, 9]);
+
+      expect(hexOf(encodeClinic(c.records, seq: c.seq, origin: c.origin)),
+          golden['clinic']);
+    });
+
+    test('provenance rides in the bytes: source vs packet origin', () {
+      // The whole point of the packet (CLINIC-WIRE.md): source ==
+      // origin = first-hand (that box's own radio); source != origin
+      // = second-hand (a peer box said it). The comparison is the
+      // caller's, but the facts it compares are in the bytes.
+      final c = decodeGolden<Clinic>(golden['clinic']!);
+      expect((c.records[0] as ClinicNodeFact).source, c.origin);
+      expect((c.records[1] as ClinicRouteFact).source, c.origin);
+      expect((c.records[2] as ClinicFlagFact).source, c.origin);
+      expect((c.records[3] as ClinicPeerFact).source, isNot(c.origin));
+    });
+  });
+
+  group('CLINIC boundary rules (loud, never silently wrong)', () {
+    test('the peer-intro shape: null-island 0/0 = NO position', () {
+      const withPos = ClinicPeerFact(
+          source: 1,
+          report: reportIntro,
+          subject: 0x22,
+          heardAgeMin: 7,
+          cls: nodeClassRepeater,
+          lat: 37.5,
+          lon: -122.25,
+          name: 'Alice');
+      const without = ClinicPeerFact(
+          source: 1, report: reportIntro, subject: 0x22, heardAgeMin: 7,
+          name: 'Bob');
+      final wire = encodeClinic(const [withPos, without], seq: 9);
+      final back = decodeClinic(wire.sublist(3));
+      final a = back.records[0] as ClinicPeerFact;
+      expect(a.lat!, closeTo(37.5, 1e-7));
+      expect(a.lon!, closeTo(-122.25, 1e-7));
+      expect(a.name, 'Alice');
+      final b = back.records[1] as ClinicPeerFact;
+      expect(b.lat, isNull);
+      expect(b.lon, isNull);
+      expect(b.name, 'Bob');
+    });
+
+    test('a peer intro name longer than 24 B refuses - never truncates', () {
+      expect(
+          () => encodeClinic(const [
+                ClinicPeerFact(
+                    source: 1,
+                    report: reportIntro,
+                    subject: 1,
+                    heardAgeMin: 0,
+                    name: 'this-name-is-far-too-long-for-the-wire'),
+              ], seq: 1),
+          throwsCodecError);
+    });
+
+    test('more than 7 records is refused (the packet cap)', () {
+      final records = [
+        for (var i = 0; i < 8; i++)
+          ClinicFlagFact(
+              source: i,
+              flag: flagRateStorm,
+              subject: i,
+              events: 1,
+              firstAgeMin: 1,
+              lastAgeMin: 1,
+              detail: 0),
+      ];
+      expect(() => encodeClinic(records, seq: 1), throwsCodecError);
+    });
+
+    test('a packet over the 163 B channel cap is refused, not sent', () {
+      // 7 fat route facts = 188 B of plaintext: the wire page caps
+      // the whole packet at MAX_CHANNEL_DATA.
+      final records = [
+        for (var i = 0; i < 7; i++)
+          ClinicRouteFact(
+              source: i,
+              path: const [1, 2, 3, 4, 5, 6, 7, 8],
+              uses: 1,
+              direct: 0,
+              delayMinS: 1,
+              delayMedS: 1,
+              delayMaxS: 1,
+              lastAgeMin: 1,
+              ageDays: 1),
+      ];
+      expect(() => encodeClinic(records, seq: 1), throwsCodecError);
+    });
+
+    test('a malformed record is rejected, not guessed', () {
+      // A node fact of the wrong size.
+      final body = BytesBuilder();
+      body.add(packHeader(1, 0));
+      body.add([1, clinicKindNode, 19]);
+      body.add(Uint8List(19));
+      expect(
+          () => decodeClinic(body.toBytes()),
+          throwsCodecError);
+      // A route fact with path_len 0 (hand-built: the ENCODER would
+      // refuse this - the DECODER must too, never guess a shape).
+      final badRoute = BytesBuilder();
+      badRoute.add(packHeader(1, 0));
+      badRoute.add([1, clinicKindRoute, 3, 1, 0, 0]);
+      expect(() => decodeClinic(badRoute.toBytes()), throwsCodecError);
+      // And the encoder refuses the same fact.
+      expect(
+          () => encodeClinic(const [
+                ClinicRouteFact(
+                    source: 1,
+                    path: [],
+                    uses: 0,
+                    direct: 0,
+                    delayMinS: 0,
+                    delayMedS: 0,
+                    delayMaxS: 0,
+                    lastAgeMin: 0,
+                    ageDays: 0),
+              ], seq: 1),
+          throwsCodecError);
+    });
+
+    test('the sentinels decode as themselves - missing stays missing', () {
+      final wire = encodeClinic(const [
+        ClinicNodeFact(
+            source: 1,
+            prefix: 2,
+            lastAgeMin: ageUnknownMin,
+            ageDays: 0,
+            strip: 0,
+            hopsTyp: 0,
+            sharePct: shareUnknownPct),
+      ], seq: 1);
+      final back =
+          decodeClinic(wire.sublist(3)).records.single as ClinicNodeFact;
+      expect(back.lastAgeMin, ageUnknownMin);
+      expect(back.sharePct, shareUnknownPct);
+      expect(back.snrEwma, signalUnknown);
+      expect(back.snrSd, signalSdUnknown);
+    });
+  });
 }
 
 /// A matcher for our own exception type (never a bare `throwsException`).

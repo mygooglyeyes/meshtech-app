@@ -8,6 +8,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:meshtech_app/clinic_store.dart';
 import 'package:meshtech_app/main_page.dart';
 import 'package:meshtech_app/settings.dart';
 import 'package:meshtech_app/store.dart';
@@ -15,6 +16,7 @@ import 'package:meshtech_app/store.dart';
 Widget _page() => MaterialApp(
       home: MainPage(
         store: NodeStore(),
+        clinic: ClinicStore(),
         settings: const ConnectionSettings(),
         onDisconnect: () {},
         onAsk: () {},

@@ -10,8 +10,15 @@ import 'package:flutter/material.dart';
 import 'app_shell.dart';
 import 'fbp_ble_transport.dart';
 import 'io_door_socket.dart';
+import 'io_usb_transport.dart';
+import 'io_wifi_transport.dart';
 
 void main() {
-  runApp(const MeshtechApp(
-      socketFactory: IoDoorSocket.new, bleFactory: FbpBleTransport.new));
+  runApp(MeshtechApp(
+      socketFactory: IoDoorSocket.new,
+      bleFactory: FbpBleTransport.new,
+      // The companion link EQUAL on all three carriers (the plan):
+      // BLE radio, USB serial radio, network companion.
+      usbFactory: IoUsbTransport.new,
+      wifiFactory: (address) => IoWifiTransport(address)));
 }

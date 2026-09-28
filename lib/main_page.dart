@@ -22,6 +22,7 @@ import 'package:flutter/material.dart' hide Route;
 import 'dart:math' as math;
 
 import 'browser_screen.dart';
+import 'clinic_store.dart';
 import 'codec.dart';
 import 'map_model.dart';
 import 'map_screen.dart';
@@ -30,6 +31,10 @@ import 'store.dart';
 
 class MainPage extends StatefulWidget {
   final NodeStore store;
+
+  /// THE CLINIC (Mesh Clinic v2): the map's simple health layer,
+  /// its five views and its tap-detail cards read from here.
+  final ClinicStore clinic;
   final ConnectionSettings settings;
   final String? frameName;
   final (double, double)? frameCenter;
@@ -55,6 +60,7 @@ class MainPage extends StatefulWidget {
   const MainPage({
     super.key,
     required this.store,
+    required this.clinic,
     required this.settings,
     this.frameName,
     this.frameCenter,
@@ -268,6 +274,7 @@ class _MainPageState extends State<MainPage> {
     if (map != null) return map(context);
     return MapScreen(
       store: widget.store,
+      clinic: widget.clinic,
       settings: widget.settings,
       frameCenter: widget.frameCenter,
       onAsk: widget.onAsk,

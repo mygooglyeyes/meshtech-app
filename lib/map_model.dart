@@ -5,6 +5,8 @@
 
 import 'dart:math' as math;
 
+import 'clinic_store.dart';
+import 'codec.dart';
 import 'store.dart';
 
 /// Where a dot's color comes from - the honest states, no invented
@@ -180,6 +182,479 @@ class MapViewModel {
       if (s > 0) counts[s - 1]++;
     }
     return counts;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// THE CLINIC LAYER (Mesh Clinic v2): the map's SIMPLE health layer -
+// one marker per positioned fact, colored by its honest state, tap-
+// detail cards behind it. FIVE FACT-FAMILY VIEWS (Brett's pick):
+// all facts / node health / route health / trouble flags / second-
+// hand peer reports - exactly the wire's record families. EVERY fact
+// is labeled first-hand/second-hand; second-hand facts are never
+// drawn as first-hand (CLINIC-WIRE.md's provenance rule).
+//
+// Honest gaps: a fact with no known position draws NOWHERE and is
+// counted out loud (never an invented place). Signal is not distance.
+// Missing numbers show as missing in every card.
+// ---------------------------------------------------------------------------
+
+enum ClinicView { all, nodes, routes, trouble, secondHand }
+
+/// The layer's simple palette: fresh (blue - the map's own fresh
+/// dot), aging (yellow - past the 3-day silent line), trouble (red -
+//  what deserves a look), secondHand (teal - a peer box's claim).
+enum ClinicColor { fresh, aging, trouble, secondHand }
+
+/// What a tap on a clinic element opens. Equality is by value so
+/// tests can name a target exactly.
+sealed class ClinicTarget {
+  const ClinicTarget();
+}
+
+class ClinicNodeTarget extends ClinicTarget {
+  final int prefix;
+  const ClinicNodeTarget(this.prefix);
+  @override
+  bool operator ==(Object other) =>
+      other is ClinicNodeTarget && other.prefix == prefix;
+  @override
+  int get hashCode => prefix.hashCode;
+  @override
+  String toString() => 'ClinicNodeTarget($prefix)';
+}
+
+class ClinicRouteTarget extends ClinicTarget {
+  final List<int> path;
+  const ClinicRouteTarget(this.path);
+  @override
+  bool operator ==(Object other) =>
+      other is ClinicRouteTarget &&
+      other.path.length == path.length &&
+      List.generate(path.length, (i) => other.path[i] == path[i])
+          .every((same) => same);
+  @override
+  int get hashCode => Object.hashAll(path);
+  @override
+  String toString() => 'ClinicRouteTarget(${path.map((p) => p.toRadixString(16).padLeft(2, '0')).join('-')})';
+}
+
+class ClinicMarker {
+  final double lat;
+  final double lon;
+  final String label;
+  final ClinicColor color;
+  final ClinicTarget target;
+
+  /// True when the marker sits at a PEER'S CLAIMED position (not at
+  /// the phone's own dot place) - the only clinic labels the map
+  /// draws, so the claim visibly wears its '2nd' tag where nothing
+  /// else names the spot. Everywhere else the base map's labels
+  /// already name the node.
+  final bool claim;
+  const ClinicMarker({
+    required this.lat,
+    required this.lon,
+    required this.label,
+    required this.color,
+    required this.target,
+    this.claim = false,
+  });
+}
+
+class ClinicLine {
+  final List<List<MapPoint>> segs;
+  final ClinicColor color;
+  final ClinicTarget target;
+  const ClinicLine(
+      {required this.segs, required this.color, required this.target});
+}
+
+class ClinicLayer {
+  final List<ClinicMarker> markers;
+  final List<ClinicLine> lines;
+
+  /// Facts that draw NOWHERE (no known position): counted out loud,
+  /// never pinned (the wire page's honest-gap law).
+  final int unpositioned;
+
+  /// How many DRAWN facts are second-hand (a peer box's claim) - the
+  /// strip says it out loud, the color shows it at a glance.
+  final int secondHandDrawn;
+  const ClinicLayer({
+    required this.markers,
+    required this.lines,
+    required this.unpositioned,
+    required this.secondHandDrawn,
+  });
+}
+
+class ClinicLayerVM {
+  /// Brett's node silence line (the map's own): a chart last heard
+  /// 3+ days ago is AGING (yellow), fresher is blue.
+  static const silentAfterMs = MapViewModel.silentAfterMs;
+
+  static ClinicLayer build(ClinicStore clinic, NodeStore store, ClinicView view,
+      {required int nowMs}) {
+    final markers = <ClinicMarker>[];
+    final lines = <ClinicLine>[];
+    var unpositioned = 0;
+    var secondHand = 0;
+    final wantNodes = view == ClinicView.all || view == ClinicView.nodes;
+    final wantRoutes = view == ClinicView.all || view == ClinicView.routes;
+    final wantTrouble = view == ClinicView.all || view == ClinicView.trouble;
+    final wantPeers =
+        view == ClinicView.all || view == ClinicView.secondHand;
+
+    if (wantNodes) {
+      for (final row in clinic.nodeFacts) {
+        final n = store.nodes[row.fact.prefix];
+        if (n?.lat == null || n?.lon == null) {
+          unpositioned++;
+          continue;
+        }
+        final ageMs = row.ageMin(row.fact.lastAgeMin, nowMs) * 60000;
+        if (!row.firstHand) secondHand++;
+        markers.add(ClinicMarker(
+          lat: n!.lat!,
+          lon: n.lon!,
+          label: _handLabel(n.label, row.firstHand),
+          // A second-hand chart is TEAL whatever its age - it is a
+          // peer's claim, never drawn as our own first-hand fact.
+          color: !row.firstHand
+              ? ClinicColor.secondHand
+              : ageMs > silentAfterMs
+                  ? ClinicColor.aging
+                  : ClinicColor.fresh,
+          target: ClinicNodeTarget(row.fact.prefix),
+        ));
+      }
+    }
+    if (wantRoutes) {
+      for (final row in clinic.routeFacts) {
+        final segs = _pathSegs(store, row.fact.path);
+        if (segs.isEmpty) {
+          unpositioned++;
+          continue;
+        }
+        final ageMs = row.ageMin(row.fact.lastAgeMin, nowMs) * 60000;
+        if (!row.firstHand) secondHand++;
+        lines.add(ClinicLine(
+          segs: segs,
+          color: !row.firstHand
+              ? ClinicColor.secondHand
+              : ageMs > silentAfterMs
+                  ? ClinicColor.aging
+                  : ClinicColor.fresh,
+          target: ClinicRouteTarget(row.fact.path),
+        ));
+      }
+    }
+    if (wantTrouble) {
+      for (final row in clinic.flagFacts) {
+        if (row.fact.subject == 0) {
+          unpositioned++; // mesh-wide: no place, listed instead
+          continue;
+        }
+        final n = store.nodes[row.fact.subject];
+        if (n?.lat == null || n?.lon == null) {
+          unpositioned++;
+          continue;
+        }
+        if (!row.firstHand) secondHand++;
+        markers.add(ClinicMarker(
+          lat: n!.lat!,
+          lon: n.lon!,
+          label: _handLabel(n.label, row.firstHand),
+          color: ClinicColor.trouble,
+          target: ClinicNodeTarget(row.fact.subject),
+        ));
+      }
+    }
+    if (wantPeers) {
+      for (final row in clinic.peerFacts) {
+        final f = row.fact;
+        switch (f.report) {
+          case reportIntro:
+            if (f.lat == null || f.lon == null) {
+              unpositioned++; // the peer reported NO position
+              continue;
+            }
+            // The claim is drawn where the PEER said it - the
+            // phone's own dot stays where it was, never merged.
+            final label = f.name.isEmpty
+                ? 'node ${f.subject.toRadixString(16).padLeft(2, '0')}'
+                : '${f.name} ${f.subject.toRadixString(16).padLeft(2, '0')}';
+            secondHand++;
+            markers.add(ClinicMarker(
+              lat: f.lat!,
+              lon: f.lon!,
+              label: '$label \u00b7 2nd',
+              color: ClinicColor.secondHand,
+              target: ClinicNodeTarget(f.subject),
+              claim: true,
+            ));
+          case reportRoute:
+            final segs = _pathSegs(store, f.path);
+            if (segs.isEmpty) {
+              unpositioned++;
+              continue;
+            }
+            secondHand++;
+            lines.add(ClinicLine(
+              segs: segs,
+              color: ClinicColor.secondHand,
+              target: ClinicRouteTarget(f.path),
+            ));
+          default:
+            unpositioned++; // pulse / section summaries: no place
+        }
+      }
+    }
+    return ClinicLayer(
+        markers: markers,
+        lines: lines,
+        unpositioned: unpositioned,
+        secondHandDrawn: secondHand);
+  }
+
+  /// The names law (section 8): every node drawn carries its label -
+  /// and a second-hand fact wears its hand right on the tag.
+  static String _handLabel(String label, bool firstHand) =>
+      firstHand ? label : '$label \u00b7 2nd';
+
+  /// The wire's travel-order path -> drawable runs (gap-split: an
+  /// unknown/positionless hop is an honest gap, never invented).
+  static List<List<MapPoint>> _pathSegs(NodeStore store, List<int> path) {
+    final segs = <List<MapPoint>>[];
+    var pts = <MapPoint>[];
+    for (final pfx in path) {
+      final n = store.nodes[pfx];
+      if (n?.lat == null || n?.lon == null) {
+        if (pts.length > 1) segs.add(pts);
+        pts = <MapPoint>[];
+        continue;
+      }
+      pts.add((n!.lon!, n.lat!));
+    }
+    if (pts.length > 1) segs.add(pts);
+    return segs;
+  }
+
+  /// WHICH FACT THE TAP HIT: the nearest marker or line within
+  /// [toleranceM] meters of the tap - or null, an honest miss (a tap
+  /// on empty map opens no card).
+  static ClinicTarget? hitTest(
+      ClinicLayer layer, MapPoint tap, double toleranceM) {
+    ClinicTarget? best;
+    var bestM = toleranceM;
+    for (final m in layer.markers) {
+      final d = _distM(tap, (m.lon, m.lat));
+      if (d < bestM) {
+        bestM = d;
+        best = m.target;
+      }
+    }
+    for (final l in layer.lines) {
+      for (final seg in l.segs) {
+        for (var i = 0; i + 1 < seg.length; i++) {
+          final d = _distToSegM(tap, seg[i], seg[i + 1]);
+          if (d < bestM) {
+            bestM = d;
+            best = l.target;
+          }
+        }
+      }
+    }
+    return best;
+  }
+
+  /// Equirectangular meters around the tap's own latitude (the grid's
+  /// honest projection - close enough for a finger, no engine).
+  static (double, double) _m(MapPoint p, double latRef) {
+    const mPerDeg = 111320.0;
+    return (p.$1 * mPerDeg * math.cos(latRef * math.pi / 180.0),
+        p.$2 * mPerDeg);
+  }
+
+  static double _distM(MapPoint a, MapPoint b) {
+    final (ax, ay) = _m(a, a.$2);
+    final (bx, by) = _m(b, a.$2);
+    return math.sqrt((ax - bx) * (ax - bx) + (ay - by) * (ay - by));
+  }
+
+  static double _distToSegM(MapPoint p, MapPoint a, MapPoint b) {
+    final (px, py) = _m(p, p.$2);
+    final (ax, ay) = _m(a, p.$2);
+    final (bx, by) = _m(b, p.$2);
+    return MapViewModel.distToSegment(px, py, ax, ay, bx, by);
+  }
+}
+
+/// THE TAP-DETAIL CARDS: one line per fact, EVERY line carrying its
+/// provenance label first. Missing numbers show as missing - never a
+/// plausible constant (the wire page's honesty rules).
+class ClinicCards {
+  /// The node's whole clinic picture from every box: charts, its
+  /// trouble flags, and what the peer boxes said about it.
+  static List<String> nodeCard(ClinicStore clinic, NodeStore store, int prefix,
+      {required int nowMs}) {
+    final out = <String>[];
+    final n = store.nodes[prefix];
+    out.add(n == null
+        ? 'node ${prefix.toRadixString(16).padLeft(2, '0')}'
+        : n.label);
+    for (final row in clinic.nodeFactsFor(prefix)) {
+      out.add('${row.label} - chart: ${_chartText(row, nowMs)}');
+    }
+    for (final row in clinic.flagsFor(prefix)) {
+      out.add('${row.label} - ${_flagText(row, nowMs)}');
+    }
+    for (final row in clinic.peerIntrosFor(prefix)) {
+      out.add('${row.label} - ${_peerText(row, nowMs)}');
+    }
+    return out;
+  }
+
+  /// Every box's chart of ONE route (the trail, travel order).
+  static List<String> routeCard(ClinicStore clinic, List<int> path,
+      {required int nowMs}) {
+    final out = <String>[
+      'route ${path.map((p) => p.toRadixString(16).padLeft(2, '0')).join('-')}',
+    ];
+    for (final row in clinic.routeFacts) {
+      if (row.fact.path.length != path.length) continue;
+      var same = true;
+      for (var i = 0; i < path.length; i++) {
+        if (row.fact.path[i] != path[i]) same = false;
+      }
+      if (!same) continue;
+      out.add('${row.label} - ${_routeText(row, nowMs)}');
+    }
+    return out;
+  }
+
+  /// The facts with NO place on the map (mesh-wide trouble + the
+  /// peer pulses/summaries) - listed, never pinned somewhere false.
+  static List<String> looseCard(ClinicStore clinic, {required int nowMs}) {
+    final out = <String>['facts without a place'];
+    for (final row in clinic.meshWideFlags) {
+      out.add('${row.label} - ${_flagText(row, nowMs)}');
+    }
+    for (final row in clinic.peerFacts) {
+      final f = row.fact;
+      if (f.report == reportPulse || f.report == reportSectSum) {
+        out.add('${row.label} - ${_peerText(row, nowMs)}');
+      }
+    }
+    return out;
+  }
+
+  static String _chartText(ClinicRow<ClinicNodeFact> row, int nowMs) {
+    final f = row.fact;
+    final parts = <String>[
+      'heard ${ageText(row.ageMin(f.lastAgeMin, nowMs))}',
+      '${f.ageDays} days old',
+      'hops ${f.hopsTyp == 0 ? 'unknown' : f.hopsTyp}',
+      shareIsUnknown(f.sharePct)
+          ? 'share unknown (no identified traffic counted)'
+          : 'share ${f.sharePct}% of identified traffic',
+      'heard in ${_popcount(f.strip)} of the last 24 hours',
+      'SNR ${_sigQ(f.snrEwma)} (best ${_sigQ(f.snrBest)}, '
+          'worst ${_sigQ(f.snrWorst)}, spread ${_sdQ(f.snrSd)})',
+      'RSSI ${_sigRaw(f.rssiEwma)} (best ${_sigRaw(f.rssiBest)}, '
+          'worst ${_sigRaw(f.rssiWorst)}, spread ${_sdRaw(f.rssiSd)})',
+    ];
+    return parts.join('; ');
+  }
+
+  static String _routeText(ClinicRow<ClinicRouteFact> row, int nowMs) {
+    final f = row.fact;
+    String d(int v) => v == 0 ? 'unknown' : '$v s';
+    return 'route: ${f.uses} uses, ${f.direct == 1 ? 'heard straight from the sender' : 'via trail'}, '
+        'delay min/med/max ${d(f.delayMinS)}/${d(f.delayMedS)}/${d(f.delayMaxS)}, '
+        'last used ${ageText(row.ageMin(f.lastAgeMin, nowMs))}, '
+        '${f.ageDays} days old';
+  }
+
+  static String _flagText(ClinicRow<ClinicFlagFact> row, int nowMs) {
+    final f = row.fact;
+    final detail = switch (f.flag) {
+      flagTsBackwards => ', worst jump ${f.detail} s',
+      flagRateStorm => ', peak ${f.detail} packets/min',
+      flagCorruptShare => '', // the share already rides in the words
+      _ => '',
+    };
+    return '${flagMeaning(f)} - ${f.events} event(s), '
+        'first ${ageText(row.ageMin(f.firstAgeMin, nowMs))}, '
+        'last ${ageText(row.ageMin(f.lastAgeMin, nowMs))}$detail';
+  }
+
+  static String _peerText(ClinicRow<ClinicPeerFact> row, int nowMs) {
+    final f = row.fact;
+    final said = ageText(row.ageMin(f.heardAgeMin, nowMs));
+    switch (f.report) {
+      case reportPulse:
+        final v = f.values;
+        return 'pulse (said $said): uptime ${_hours(v[0])}, '
+            '${v[1]}/h, ${v[2]} active, airtime ${v[3]} s/h';
+      case reportSectSum:
+        final v = f.values;
+        return 'section ${f.subject} summary (said $said): '
+            '${v[0]} active, ${v[1]} packets, '
+            'delay p50 ${_secOrUnknown(v[2])} / p90 ${_secOrUnknown(v[3])}';
+      case reportRoute:
+        final v = f.values;
+        return 'route report (said $said): ${v[0]} uses, '
+            'delay med ${_secOrUnknown(v[1])}, '
+            'last used ${ageText(v[2])}, '
+            'path ${f.path.map((p) => p.toRadixString(16).padLeft(2, '0')).join('-')}';
+      case reportIntro:
+        final place = f.lat == null
+            ? 'no position reported'
+            : 'at ${f.lat!.toStringAsFixed(5)}, ${f.lon!.toStringAsFixed(5)}';
+        final name = f.name.isEmpty ? '(no name)' : f.name;
+        return 'said (said $said): $name, class ${f.cls}, $place';
+      default:
+        return 'unknown report (said $said)';
+    }
+  }
+
+  /// Missing stays missing - the sentinels speak as unknown.
+  static String ageText(int min) => ageIsUnknown(min)
+      ? 'unknown (older than the wire can say)'
+      : min < 90
+          ? '$min min ago'
+          : min < 48 * 60
+              ? '${(min / 60).round()} h ago'
+              : '${(min / 1440).round()} d ago';
+
+  static String _hours(int uptimeMin) =>
+      '${(uptimeMin / 60).round()} h';
+
+  static String _secOrUnknown(int s) => s == 0 ? 'unknown' : '$s s';
+
+  /// SNR rides quarter-dB (like discover); a receiver never reports
+  /// -128, so that sentinel is honest 'unknown'.
+  static String _sigQ(int q) =>
+      signalIsUnknown(q) ? 'unknown' : '${q / 4} dB';
+
+  static String _sigRaw(int v) =>
+      signalIsUnknown(v) ? 'unknown' : '$v dBm';
+
+  /// SNR spread rides quarter-dB like SNR itself; RSSI spread is dB.
+  static String _sdQ(int v) =>
+      v == signalSdUnknown ? 'unknown' : '${v / 4} dB';
+
+  static String _sdRaw(int v) =>
+      v == signalSdUnknown ? 'unknown' : '$v dB';
+
+  static int _popcount(int strip) {
+    var count = 0;
+    for (var i = 0; i < 24; i++) {
+      if ((strip >> i) & 1 == 1) count++;
+    }
+    return count;
   }
 }
 

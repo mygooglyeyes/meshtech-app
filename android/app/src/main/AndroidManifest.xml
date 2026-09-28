@@ -13,6 +13,13 @@
         android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"
         android:maxSdkVersion="30" />
+    <!-- The companion radio link, carrier 2: USB serial (phone OTG
+         -> radio). Optional (required="false"): the app installs
+         everywhere, and the USB chip refuses in plain words where no
+         USB host exists. usb_serial asks Android's device permission
+         itself when the port opens. -->
+    <uses-feature android:name="android.hardware.usb.host"
+        android:required="false" />
     <application
         android:label="meshtech_app"
         android:name="${applicationName}"

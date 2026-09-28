@@ -563,7 +563,7 @@ class CompanionLink implements Link {
   Future<void> connect() async {
     _wantRun = true;
     _setState(LinkState.connecting, 'scanning for the radio');
-    _log('companion: scanning for the radio (BLE)');
+    _log('companion: scanning for the radio');
     try {
       // The factory INSIDE the try: an unwired BLE (web, tests) or a
       // missing radio must refuse in plain words, never hang the app

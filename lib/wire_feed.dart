@@ -89,5 +89,6 @@ String packetName(Object p) => switch (p) {
       SectSum s => 'section ${s.sectionId} summary',
       Route r => 'route ${r.routeId} (${r.prefixes.length} hop(s))',
       Gone g => 'gone (${g.prefixes.length} node(s))',
+      Clinic c => 'clinic (${c.records.length} fact(s))',
       _ => 'packet',
     };

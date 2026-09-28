@@ -1,8 +1,15 @@
-// The BLE transport seam: whatever CompanionLink talks through. Split
-// from the plugin implementation so the companion protocol compiles
-// (and is TESTED) on the VM - the same lesson as DoorSocket, applied
-// to Bluetooth instead of the WebSocket. The real entrypoint supplies
-// the flutter_blue_plus transport; tests supply a fake.
+// The companion transport seam: whatever CompanionLink talks
+// through - and the companion link is EQUAL on BLE, USB serial and
+// network WiFi (Mesh Clinic v2's law): the SAME protocol engine over
+// three carriers, each a transport behind this seam. Split from the
+// platform implementations so the companion protocol compiles (and
+// is TESTED) on the VM - the same lesson as DoorSocket, applied to
+// every carrier. The real entrypoint supplies the platform
+// transports (fbp_ble_transport / io_usb_transport /
+// io_wifi_transport); tests supply fakes.
+//
+// (The type keeps its BLE-era name so the seam stays one seam - the
+// docs say carriers; the name is naming debt, not a wire fact.)
 
 import 'dart:typed_data';
 
@@ -56,3 +63,7 @@ class BleRefusal implements Exception {
 
 /// Creates the platform transport (wired in main.dart).
 typedef BleTransportFactory = BleTransport Function();
+
+/// Creates a NETWORK companion transport (the WiFi chip): it needs
+/// the dial address the human typed ('host' or 'host:port').
+typedef NetworkTransportFactory = BleTransport Function(String address);

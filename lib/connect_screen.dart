@@ -140,8 +140,10 @@ class _ConnectScreenState extends State<ConnectScreen> {
     // NO SILENT REFUSAL (Brett, 2026-09-25): an empty address says
     // so on screen and in the device log - the button never again
     // appears dead. TCP is the only link that dials an address.
-    if (target == linkTcp && host.isEmpty) {
-      setState(() => _error = 'no address yet - type the hilltop address');
+    if ((target == linkTcp || target == linkWifi) && host.isEmpty) {
+      setState(() => _error = target == linkWifi
+          ? 'no address yet - type the companion address'
+          : 'no address yet - type the hilltop address');
       debugPrint('CONNECT REFUSED: empty address');
       return;
     }
@@ -210,32 +212,38 @@ class _ConnectScreenState extends State<ConnectScreen> {
             ],
           ),
           const SizedBox(height: 12),
-          // The address + door password are TCP's facts only - they
-          // wait behind the TCP chip (WiFi on the selector means a
-          // companion over the network, not this door).
-          if (_target == linkTcp) ...[
+          // The address rides the TCP door AND the network companion
+          // (WiFi chip = a companion found over the network); the
+          // door password is the door's alone.
+          if (_target == linkTcp || _target == linkWifi) ...[
             TextField(
               controller: _host,
               onTap: () => debugPrint('FIELD-AT host'),
-              decoration: const InputDecoration(
-                labelText: 'Hilltop address',
-                hintText: '192.168.12.145 (or host:port)',
-                border: OutlineInputBorder(),
+              decoration: InputDecoration(
+                labelText: _target == linkWifi
+                    ? 'Companion address'
+                    : 'Hilltop address',
+                hintText: _target == linkWifi
+                    ? '192.168.12.145:5000 (host or host:port)'
+                    : '192.168.12.145 (or host:port)',
+                border: const OutlineInputBorder(),
               ),
               enabled: !connected,
             ),
             const SizedBox(height: 12),
-            TextField(
-              controller: _password,
-              onTap: () => debugPrint('FIELD-AT password'),
-              obscureText: true,
-              decoration: const InputDecoration(
-                labelText: 'Data-door password',
-                border: OutlineInputBorder(),
+            if (_target == linkTcp) ...[
+              TextField(
+                controller: _password,
+                onTap: () => debugPrint('FIELD-AT password'),
+                obscureText: true,
+                decoration: const InputDecoration(
+                  labelText: 'Data-door password',
+                  border: OutlineInputBorder(),
+                ),
+                enabled: !connected,
               ),
-              enabled: !connected,
-            ),
-            const SizedBox(height: 12),
+              const SizedBox(height: 12),
+            ],
           ],
           // THE HOME AREA (section 9): chosen once, saved as hard
           // data - the map's center comes from here.

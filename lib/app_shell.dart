@@ -22,6 +22,7 @@ import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter/material.dart' hide Route;
 
 import 'ble_transport.dart';
+import 'clinic_store.dart';
 import 'codec.dart';
 import 'companion_protocol.dart'
     show channelSecretHex, scopeChannelName;
@@ -37,6 +38,8 @@ import 'store.dart';
 class MeshtechApp extends StatefulWidget {
   final DoorSocketFactory socketFactory;
   final BleTransportFactory bleFactory;
+  final BleTransportFactory usbFactory;
+  final NetworkTransportFactory wifiFactory;
 
   /// Test seam (the same one MainPage offers): a widget test stands a
   /// plain body in for the map, so no live map engine is needed in the
@@ -46,6 +49,8 @@ class MeshtechApp extends StatefulWidget {
       {super.key,
       this.socketFactory = _noSocket,
       this.bleFactory = _noBle,
+      this.usbFactory = _noUsb,
+      this.wifiFactory = _noWifi,
       this.mapBuilder});
 
   @override
@@ -62,9 +67,22 @@ DoorSocket _noSocket() => throw UnsupportedError(
 BleTransport _noBle() => throw UnsupportedError(
     'no BLE transport wired for this entrypoint');
 
+/// The honest default: no USB wired (web build, VM tests).
+BleTransport _noUsb() => throw UnsupportedError(
+    'no USB transport wired for this entrypoint');
+
+/// The honest default: no network companion wired (web build, VM
+/// tests) - a plain-words refusal, never a fake dial.
+BleTransport _noWifi(String address) => throw UnsupportedError(
+    'no network companion transport wired for this entrypoint');
+
 class _MeshtechAppState extends State<MeshtechApp> {
   ConnectionSettings _settings = const ConnectionSettings();
   late final NodeStore _store;
+  // THE CLINIC (Mesh Clinic v2): the clinic's facts live beside the
+  // nodes in their own store - provenance tagged, removal laws from
+  // CLINIC-WIRE.md, saved with the same debounced save.
+  late final ClinicStore _clinic;
   late final LinkEvents _tcpEvents;
   late final LinkEvents _airEvents;
   late TcpLink _tcpLink;
@@ -74,6 +92,18 @@ class _MeshtechAppState extends State<MeshtechApp> {
   // the map even with no TCP at all).
   LinkState _tcpState = LinkState.disabled;
   LinkState _airState = LinkState.disabled;
+
+  /// WHICH CARRIER THE AIR LINK DIALS (Brett's four chips): the
+  /// companion link is EQUAL on BLE / USB / WiFi - the same protocol
+  /// engine over three transports (the plan's law). The chip pressed
+  /// decides; the factory reads it at dial time.
+  String _airKind = linkBle;
+
+  BleTransport _makeAirTransport() => switch (_airKind) {
+        linkUsb => widget.usbFactory(),
+        linkWifi => widget.wifiFactory(_settings.host),
+        _ => widget.bleFactory(),
+      };
   String _linkDetail = '';
   final List<String> _log = [];
   String? _frameName;
@@ -130,6 +160,7 @@ class _MeshtechAppState extends State<MeshtechApp> {
   void initState() {
     super.initState();
     _store = NodeStore();
+    _clinic = ClinicStore();
     _tcpEvents = LinkEvents(
       onState: (s, d) => _safeSetState(() {
         _tcpState = s;
@@ -173,7 +204,7 @@ class _MeshtechAppState extends State<MeshtechApp> {
     );
     _tcpLink = _buildLink();
     _airLink = CompanionLink(_airEvents,
-        transportFactory: widget.bleFactory,
+        transportFactory: _makeAirTransport,
         devicePicker: _pickRadio);
     _bootstrap();
   }
@@ -375,6 +406,7 @@ class _MeshtechAppState extends State<MeshtechApp> {
       // marker 0 = the full roster. Release builds remember (the
       // offline-trail design, section 4).
       await _store.wipe();
+      await _clinic.wipe();
       loaded = loaded.copyWith(syncMarker: 0);
       await SettingsStore().save(loaded);
       // Wipe complete: the store is empty on flash too. Open the
@@ -384,6 +416,10 @@ class _MeshtechAppState extends State<MeshtechApp> {
     } else {
       _store.noteSyncMarker(loaded.syncMarker);
       await _store.load();
+      // The clinic's facts come back too - and anything that died
+      // while the app was shut is gone the moment it reopens.
+      await _clinic.load(
+          nowMs: DateTime.now().millisecondsSinceEpoch);
       // THE LINES SURVIVE A RESTART (Brett, 2026-09-27): the saved map
       // frame comes back with the dots - the map draws its grid
       // immediately, no TCP trip needed. A node restart still clears
@@ -435,6 +471,10 @@ class _MeshtechAppState extends State<MeshtechApp> {
       case final Gone g:
         for (final p in g.prefixes) {
           _store.removeGone(p);
+          // THE FACTS FOLLOW THE NODE (CLINIC-WIRE's forget law):
+          // its chart, its flags and its peer INTRO reports die with
+          // it - peer ROUTE reports survive (they are the route's).
+          _clinic.forgetNode(p);
           // THE LINE FOLLOWS THE DOT (Brett, 2026-09-27): a GONE
           // update removes the node's route lines too - they are
           // lines TO it, fiction without the dot.
@@ -475,6 +515,14 @@ class _MeshtechAppState extends State<MeshtechApp> {
             'no-place${known < r.prefixes.length
                 ? ', ${r.prefixes.length - known} unknown node(s)'
                 : ''}');
+      case final Clinic c:
+        // THE CLINIC (Mesh Clinic v2): the clinic's facts land the
+        // moment they are heard - provenance tagged, one row per
+        // measuring box, never merged (CLINIC-WIRE's rule).
+        _clinic.fold(c, heardMs: now);
+        final head = c.origin.toRadixString(16).padLeft(4, '0');
+        _logLine('clinic: ${c.records.length} fact(s) folded '
+            '(box $head sent)');
       default:
         break;
     }
@@ -482,8 +530,12 @@ class _MeshtechAppState extends State<MeshtechApp> {
     _saveTimer = Timer(const Duration(seconds: 2), () {
       // The wipe gate: no packet may re-persist pre-wipe memory.
       if (_wipeGate) return;
+      // THE CLINIC'S REMOVAL AGES (CLINIC-WIRE.md) run while the app
+      // is up - facts die when their evidence stops being fresh.
+      _clinic.prune(nowMs: DateTime.now().millisecondsSinceEpoch);
       _store.save().then((_) => SettingsStore()
           .save(_settings.copyWith(syncMarker: _store.syncMarker)));
+      _clinic.save();
     });
     _safeSetState(() {});
   }
@@ -494,8 +546,9 @@ class _MeshtechAppState extends State<MeshtechApp> {
   /// from app start. The ZIP's center arrives already resolved by
   /// the screen (it shows the lookup's honest error if it failed).
   /// THE SELECTED CHIP DIALS (Brett 2026-09-25): `link` names which
-  /// chip was pressed - ONLY that link connects. USB and WiFi are in
-  /// the 4-way selector but not built yet: said plainly, never faked.
+  /// chip was pressed - ONLY that link connects. THE COMPANION LINK
+  /// IS EQUAL ON BLE / USB / WiFi (Mesh Clinic v2): the same
+  /// protocol engine over the carrier the chip stands for.
   Future<void> _connect(String link, String host, String password,
       int mapSizeKm, String homeZip, (double, double)? homeCenter) async {
     debugPrint('SHELL CONNECT link="$link" host="$host"');
@@ -513,17 +566,17 @@ class _MeshtechAppState extends State<MeshtechApp> {
     setState(() {
       _settings = next;
       _tcpLink = _buildLink();
+      // The companion carrier the chosen chip stands for (BLE, USB
+      // or WiFi - one link, three equal carriers).
+      _airKind = link;
     });
     switch (link) {
       case linkTcp:
         await _tcpLink.connect();
       case linkBle:
+      case linkUsb:
+      case linkWifi:
         await _airLink.connect();
-      default:
-        // USB / WiFi: selectable, and honest about being un-built.
-        final name = link == linkUsb ? 'USB' : 'WiFi';
-        _logLine('$name link: not built yet - pick BLE or TCP');
-        _safeSetState(() => _linkDetail = '$name link: not built yet');
     }
   }
 
@@ -620,6 +673,7 @@ class _MeshtechAppState extends State<MeshtechApp> {
     // this session heard is wiped on flash too (fresh next launch).
     if (kDebugMode) {
       _store.wipe();
+      _clinic.wipe();
     }
     super.dispose();
   }  /// THE BLUELINE PALETTE (Brett, 2026-09-25): the logo's drafting
@@ -702,6 +756,7 @@ class _MeshtechAppState extends State<MeshtechApp> {
                 children: [
                   MainPage(
                     store: _store,
+                    clinic: _clinic,
                     settings: _settings,
                     frameName: _frameName,
                     frameCenter: _frameCenter,
