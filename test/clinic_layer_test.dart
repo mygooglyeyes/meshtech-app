@@ -498,9 +498,13 @@ void main() {
           contains('Direct (b17e)'));
       expect(card.whereType<HealthNote>().map((n) => n.text),
           contains('56 use(s) counted'));
-      final delay = card.whereType<HealthBar>().single;
-      expect(delay.value, '2/4/9 s');
-      expect(delay.note, 'min/med/max');
+      // The three-bar law (Brett, 2026-09-30): a TOTAL of three
+      // bars under this heading - hops, delay, uses - each merged
+      // low/avg/high over every number gathered for the route.
+      final bars = {for (final b in card.whereType<HealthBar>()) b.key: b};
+      expect(bars.keys, unorderedEquals(['hops', 'delay', 'uses']));
+      expect(bars['delay']!.value, '2/4/9 s');
+      expect(bars['delay']!.note, 'low/avg/high');
       final gaps = [for (final g in card.whereType<HealthGap>()) g.text];
       expect(gaps, contains('per-hop signal: not measured yet'));
       expect(gaps, contains('duplicates: not measured yet'));
@@ -734,6 +738,85 @@ void main() {
               nowMs: nowMs);
       final gaps = [for (final r in rows) if (r is HealthGap) r.text];
       expect(gaps, contains('hops \u00b7 delay \u00b7 uses: not measured yet'));
+    });
+
+    test('a TOTAL of three bars - however many nodes measured '
+        '(Brett, 2026-09-30, corrected at the bench)', () {
+      final clinic = _clinic(nowMs, [
+        const ClinicRouteFact(
+            source: 0xb17e,
+            path: [0x21, 0x22],
+            uses: 5,
+            direct: 0,
+            delayMinS: 1,
+            delayMedS: 2,
+            delayMaxS: 3,
+            lastAgeMin: 4,
+            ageDays: 1),
+        const ClinicRouteFact(
+            source: 0xbeef,
+            path: [0x21, 0x22, 0x23],
+            uses: 9,
+            direct: 0,
+            delayMinS: 4,
+            delayMedS: 6,
+            delayMaxS: 8,
+            lastAgeMin: 4,
+            ageDays: 1),
+        const ClinicRouteFact(
+            source: 0xcafe,
+            path: [0x21, 0x24],
+            uses: 2,
+            direct: 0,
+            delayMinS: 0,
+            delayMedS: 0,
+            delayMaxS: 0,
+            lastAgeMin: 6,
+            ageDays: 2),
+      ]);
+      final rows = ClinicCards.nodeHealthCard(clinic, 0x21, nowMs: nowMs);
+      final bars = [for (final r in rows) if (r is HealthBar) r];
+      for (final key in ['hops', 'delay', 'uses']) {
+        expect(bars.where((b) => b.key == key), hasLength(1),
+            reason: '$key: exactly one bar, however many boxes report');
+      }
+      // Three measuring boxes, three trails - the delay bar merges
+      // the KNOWN numbers (1..8 s around 4 s; the third trail never
+      // measured delay, so it stays out of the average honestly).
+      expect(bars.firstWhere((b) => b.key == 'delay').value, '1/4/8 s');
+    });
+
+    test('the route card speaks the same three merged bars', () {
+      final clinic = _clinic(nowMs, [
+        const ClinicRouteFact(
+            source: 0xb17e,
+            path: [0x21, 0x22],
+            uses: 5,
+            direct: 0,
+            delayMinS: 1,
+            delayMedS: 2,
+            delayMaxS: 3,
+            lastAgeMin: 4,
+            ageDays: 1),
+        const ClinicRouteFact(
+            source: 0xbeef,
+            path: [0x21, 0x22],
+            uses: 9,
+            direct: 0,
+            delayMinS: 4,
+            delayMedS: 6,
+            delayMaxS: 8,
+            lastAgeMin: 4,
+            ageDays: 1),
+      ]);
+      final rows =
+          ClinicCards.routeHealthCard(clinic, [0x21, 0x22], nowMs: nowMs);
+      final bars = [for (final r in rows) if (r is HealthBar) r];
+      for (final key in ['hops', 'delay', 'uses']) {
+        expect(bars.where((b) => b.key == key), hasLength(1),
+            reason: '$key: exactly one bar, however many boxes report');
+      }
+      expect(bars.firstWhere((b) => b.key == 'delay').value, '1/4/8 s');
     });
   });
 }

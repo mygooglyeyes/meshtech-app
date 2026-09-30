@@ -746,23 +746,20 @@ class ClinicCards {
       final h = row.fact.hopsTyp;
       out.add(HealthNote(h == 0 ? 'Typical hops: unknown' : 'Typical hops: $h'));
     }
-    // THE AGGREGATE BARS (Brett, 2026-09-30): the per-route list
-    // under this heading was frequently too long (a busy node sits
-    // on hundreds of trails). Every metric that list carried now
-    // reads as ONE fixed-scale bar per measuring box - the tick at
-    // the average, the span lowest..highest (the same grammar the
-    // delay bars speak). Provenance stays chipped per box.
-    final trails = <String, List<ClinicRouteFact>>{};
-    for (final row in clinic.routeFacts) {
-      if (!row.fact.path.contains(prefix)) continue;
-      (trails[row.label] ??= []).add(row.fact);
-    }
-    for (final entry in trails.entries) {
-      wear(entry.key);
-      out.addAll(_statBars(entry.value));
-    }
-    if (trails.isEmpty) {
+    // THE AGGREGATE BARS (Brett, 2026-09-30, corrected at the bench
+    // the same day): a TOTAL of three bars under this heading -
+    // hops, delay, uses - not one set per reporting node ("I only
+    // wanted a total of 3"). Each merges every number gathered for
+    // this node across all measuring boxes: the tick at the
+    // average, the span lowest..highest.
+    final facts = <ClinicRouteFact>[
+      for (final row in clinic.routeFacts)
+        if (row.fact.path.contains(prefix)) row.fact,
+    ];
+    if (facts.isEmpty) {
       _gapRows(out, ['hops', 'delay', 'uses']);
+    } else {
+      out.addAll(_statBars(facts));
     }
     for (final row in exchange) {
       wear(row.label);
@@ -845,10 +842,18 @@ class ClinicCards {
     out.add(const HealthGap('duplicates: not measured yet'));
 
     family('Delivery reliability & latency');
+    // THE AGGREGATE BARS (Brett, 2026-09-30): the node card's own
+    // three-bar grammar - a TOTAL of three bars merging every
+    // number gathered for this route, not one set per reporting
+    // node.
+    if (rows.isEmpty) {
+      _gapRows(out, ['hops', 'delay', 'uses']);
+    } else {
+      out.addAll(_statBars([for (final row in rows) row.fact]));
+    }
     for (final row in rows) {
       wear(row.label);
       final f = row.fact;
-      out.addAll(_delayBars(f));
       out.add(HealthNote(
           '${f.direct == 1 ? 'straight from sender' : 'via trail'} \u00b7 '
           'last used ${ageText(row.ageMin(f.lastAgeMin, nowMs))} \u00b7 '
@@ -954,7 +959,6 @@ class ClinicCards {
     return out;
   }
 
-  /// One route's delay bar (0 = unknown on the wire - it says so).
   /// One box's trail-metrics as three aggregate bars (Brett,
   /// 2026-09-30: "Hops: average, highest, lowest; delay: ...; Uses:
   /// ..." - every metric the old list carried, in one row each).
@@ -1017,22 +1021,6 @@ class ClinicCards {
         start: barFrac(lo, scaleLo, scaleHi),
         end: barFrac(hi, scaleLo, scaleHi),
         tick: barFrac(avg, scaleLo, scaleHi));
-  }
-
-  static List<HealthRow> _delayBars(ClinicRouteFact f) {
-    if (f.delayMinS == 0 && f.delayMedS == 0 && f.delayMaxS == 0) {
-      return const [HealthNote('delay unknown')];
-    }
-    String d(int v) => v == 0 ? '?' : '$v';
-    return [
-      HealthBar(
-          key: 'delay',
-          value: '${d(f.delayMinS)}/${d(f.delayMedS)}/${d(f.delayMaxS)} s',
-          note: 'min/med/max',
-          start: barFrac(f.delayMinS.toDouble(), delayScaleLo, delayScaleHi),
-          end: barFrac(f.delayMaxS.toDouble(), delayScaleLo, delayScaleHi),
-          tick: barFrac(f.delayMedS.toDouble(), delayScaleLo, delayScaleHi)),
-    ];
   }
 
   /// The flag in compact words (Brett, 2026-09-29): name, count,
