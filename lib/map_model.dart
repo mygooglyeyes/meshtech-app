@@ -294,8 +294,18 @@ class ClinicLayerVM {
   /// 3+ days ago is AGING (yellow), fresher is blue.
   static const silentAfterMs = MapViewModel.silentAfterMs;
 
+  /// THE TIME WINDOW (Brett, 2026-09-30: "time frames 1hr 4hrs 12hrs
+  /// 1day 7days 14days as a dropdown when selecting one of the clinic
+  /// chips"): when a window is set, a fact draws only when its age
+  /// says it was heard INSIDE it. An unknown age ("older than the
+  /// wire says") fits no window - it stays hidden here and lives in
+  /// the cards and the honest loose list, never invented as fresh.
+  /// windowMin 0 = no window (draw everything).
+  static bool _inWindow(int ageMin, int windowMin) =>
+      windowMin <= 0 || (!ageIsUnknown(ageMin) && ageMin <= windowMin);
+
   static ClinicLayer build(ClinicStore clinic, NodeStore store, ClinicView view,
-      {required int nowMs}) {
+      {required int nowMs, int windowMin = 0}) {
     final markers = <ClinicMarker>[];
     final lines = <ClinicLine>[];
     var unpositioned = 0;
@@ -313,7 +323,9 @@ class ClinicLayerVM {
           unpositioned++;
           continue;
         }
-        final ageMs = row.ageMin(row.fact.lastAgeMin, nowMs) * 60000;
+        final ageMin = row.ageMin(row.fact.lastAgeMin, nowMs);
+        if (!_inWindow(ageMin, windowMin)) continue;
+        final ageMs = ageMin * 60000;
         if (!row.firstHand) secondHand++;
         markers.add(ClinicMarker(
           lat: n!.lat!,
@@ -337,7 +349,9 @@ class ClinicLayerVM {
           unpositioned++;
           continue;
         }
-        final ageMs = row.ageMin(row.fact.lastAgeMin, nowMs) * 60000;
+        final ageMin = row.ageMin(row.fact.lastAgeMin, nowMs);
+        if (!_inWindow(ageMin, windowMin)) continue;
+        final ageMs = ageMin * 60000;
         if (!row.firstHand) secondHand++;
         lines.add(ClinicLine(
           segs: segs,
@@ -361,6 +375,9 @@ class ClinicLayerVM {
           unpositioned++;
           continue;
         }
+        if (!_inWindow(row.ageMin(row.fact.lastAgeMin, nowMs), windowMin)) {
+          continue;
+        }
         if (!row.firstHand) secondHand++;
         markers.add(ClinicMarker(
           lat: n!.lat!,
@@ -382,6 +399,9 @@ class ClinicLayerVM {
             }
             // The claim is drawn where the PEER said it - the
             // phone's own dot stays where it was, never merged.
+            if (!_inWindow(row.ageMin(f.heardAgeMin, nowMs), windowMin)) {
+              continue;
+            }
             final label = f.name.isEmpty
                 ? 'node ${f.subject.toRadixString(16).padLeft(2, '0')}'
                 : '${f.name} ${f.subject.toRadixString(16).padLeft(2, '0')}';
@@ -398,6 +418,9 @@ class ClinicLayerVM {
             final segs = _pathSegs(store, f.path);
             if (segs.isEmpty) {
               unpositioned++;
+              continue;
+            }
+            if (!_inWindow(row.ageMin(f.heardAgeMin, nowMs), windowMin)) {
               continue;
             }
             secondHand++;
@@ -1112,6 +1135,18 @@ class SectionCell {
     required this.spanLatM,
     required this.spanLonM,
   });
+
+  /// The square's own geography (Brett, 2026-09-30: the section LIST
+  /// scopes to the tapped square): is this point inside the cell?
+  /// The same meters-per-degree math the grid lines speak.
+  bool contains(double lat, double lon) {
+    const mPerDeg = 111320.0;
+    final dLat = (lat - centerLat).abs() * mPerDeg;
+    final dLon = (lon - centerLon).abs() *
+        mPerDeg *
+        math.cos(centerLat * math.pi / 180.0);
+    return dLat <= spanLatM / 2 && dLon <= spanLonM / 2;
+  }
 }
 
 /// THE PHONE'S VIEW GRID (Brett, 2026-09-24): 3 wide x 4 tall - the

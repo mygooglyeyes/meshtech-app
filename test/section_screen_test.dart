@@ -3,7 +3,7 @@
 // closing rules - pumped with the mapBuilder seam, so no live map
 // engine is needed (the same seam MainPage's tests use).
 
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide Route;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:meshtech_app/clinic_store.dart';
@@ -18,9 +18,10 @@ const _cell = SectionCell(
     id: 5, centerLat: 38.0, centerLon: -122.0,
     spanLatM: 15000, spanLonM: 20000);
 
-Widget _page({SectSum? summary, VoidCallback? onClose}) => MaterialApp(
+Widget _page({SectSum? summary, VoidCallback? onClose, NodeStore? store}) =>
+    MaterialApp(
       home: SectionScreen(
-        store: NodeStore(),
+        store: store ?? NodeStore(),
         clinic: ClinicStore(),
         cell: _cell,
         summary: summary,
@@ -72,5 +73,50 @@ void main() {
     await tester.tap(find.byKey(const Key('section-routes')));
     await tester.pump();
     expect((toggle().icon as Icon).color, Colors.white38); // hidden again
+  });
+
+  testWidgets("the list option (the main page's own) swaps in this "
+      "square's rows - and a row opens the health card", (tester) async {
+    final store = NodeStore();
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    store.upsert(NodeRecord(
+        prefix: 0x21, name: 'Hilltop', lat: 38.0, lon: -122.0,
+        lastHeardMs: nowMs));
+    store.upsert(NodeRecord(
+        prefix: 0x22, name: 'Faraway', lat: 30.0, lon: -100.0,
+        lastHeardMs: nowMs));
+    await tester.pumpWidget(_page(store: store));
+    expect(find.byKey(const Key('fake-sect-map')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('section-list')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('fake-sect-map')), findsNothing);
+    expect(find.text('Hilltop'), findsOneWidget); // this square's node
+    expect(find.text('Faraway'), findsNothing); // not this square's
+    // a row tap opens the same health card the map does - proven by
+    // its honest gap rows (this store holds no clinic facts yet)
+    await tester.tap(find.text('Hilltop'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('not measured yet'), findsWidgets);
+  });
+
+  testWidgets('the list scopes its routes to the square too, and the '
+      'switch flips back to the map', (tester) async {
+    final store = NodeStore();
+    store.applyRoute(Route(
+        seq: 1, sectionId: 5, routeId: 77, packetCount: 4,
+        delayMedS: 12, lastHeardMin: 5, prefixes: [0x11, 0x12]));
+    store.applyRoute(Route(
+        seq: 2, sectionId: 6, routeId: 88, packetCount: 2,
+        delayMedS: 8, lastHeardMin: 5, prefixes: [0x13, 0x14]));
+    await tester.pumpWidget(_page(store: store));
+    await tester.tap(find.byKey(const Key('section-list')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Routes'));
+    await tester.pumpAndSettle();
+    expect(find.text('route 77'), findsOneWidget); // this square
+    expect(find.text('route 88'), findsNothing); // not this square
+    await tester.tap(find.byKey(const Key('section-list')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('fake-sect-map')), findsOneWidget);
   });
 }

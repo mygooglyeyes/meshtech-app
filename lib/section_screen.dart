@@ -78,6 +78,12 @@ class _SectionScreenState extends State<SectionScreen> {
   /// by default, not saved.
   bool _pastRoutes = false;
 
+  /// MAP OR LIST (Brett, 2026-09-30: node labels overlap and taps
+  /// miss - "pinch to zoom, and the same 'list' option as the main
+  /// page"). The list shows THIS square's nodes and routes as
+  /// tappable rows - the same tap rules and the same health cards.
+  bool _showList = false;
+
   /// THE SELECTION (Brett's tap rules): at most ONE element holds it
   /// - a node prefix OR a route id, 0 = none. Nothing else on the
   /// page ever keeps a selection.
@@ -127,6 +133,35 @@ class _SectionScreenState extends State<SectionScreen> {
         ),
       ),
     );
+  }
+
+  /// A route tapped from the LIST: the same tap rules as the map -
+  /// the same route deselects, a new one takes over, and its health
+  /// card opens (Brett, 2026-09-30).
+  void _selectRoute(int routeId) {
+    setState(() {
+      _selRoute = _selRoute == routeId ? 0 : routeId;
+      _selPrefix = 0;
+    });
+    final r = widget.store.route(routeId);
+    if (r != null) {
+      _openHealthCard(
+          ClinicCards.routeTitle(r.prefixes),
+          ClinicCards.routeHealthCard(widget.clinic, r.prefixes,
+              nowMs: DateTime.now().millisecondsSinceEpoch));
+    }
+  }
+
+  /// The map/list switch (the main page's own option, 2026-09-30):
+  /// flipping it moves the selection off whatever held it - a button
+  /// press never leaves a selection stranded (Brett's rule: nothing
+  /// stuck).
+  void _toggleList() {
+    setState(() {
+      _showList = !_showList;
+      _selPrefix = 0;
+      _selRoute = 0;
+    });
   }
 
   /// The toggle button: flips the background lines AND moves the
@@ -224,13 +259,16 @@ class _SectionScreenState extends State<SectionScreen> {
         faint.addAll(l.segs);
       }
     }
-    final body = widget.mapBuilder != null
-        ? widget.mapBuilder!(context)
-        : _buildMap(dots, faint, hot, sel);
+    final body = _showList
+        ? _listBody()
+        : widget.mapBuilder != null
+            ? widget.mapBuilder!(context)
+            : _buildMap(dots, faint, hot, sel);
     return Scaffold(
       // The page's own bar: back to the map, which section this is,
-      // and the background toggle (Brett: the routes get their OWN
-      // button here, independent of the main map's).
+      // the map/list switch (Brett, 2026-09-30), and the background
+      // toggle (Brett: the routes get their OWN button here,
+      // independent of the main map's).
       appBar: AppBar(
         leading: IconButton(
           key: const ValueKey('section-back'),
@@ -240,6 +278,12 @@ class _SectionScreenState extends State<SectionScreen> {
         ),
         title: Text('Section ${widget.cell.id}'),
         actions: [
+          IconButton(
+            key: const ValueKey('section-list'),
+            tooltip: _showList ? 'Switch to the map' : 'Switch to the list',
+            icon: Icon(_showList ? Icons.map : Icons.list),
+            onPressed: _toggleList,
+          ),
           IconButton(
             key: const ValueKey('section-routes'),
             tooltip: _pastRoutes
@@ -266,6 +310,93 @@ class _SectionScreenState extends State<SectionScreen> {
             ),
           ),
           Expanded(child: body),
+        ],
+      ),
+    );
+  }
+
+  /// THE LIST (Brett, 2026-09-30 - the main page's own option):
+  /// THIS square's nodes and routes as tappable rows, because
+  /// overlapping map labels eat taps. A row follows the page's tap
+  /// rules and opens the same health card the map does.
+  Widget _listBody() {
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final cell = widget.cell;
+    final nodes = [
+      for (final n in widget.store.nodes.values)
+        if (n.lat != null && n.lon != null && cell.contains(n.lat!, n.lon!))
+          n,
+    ]..sort((a, b) => (a.name ?? a.prefix.toString())
+        .toLowerCase()
+        .compareTo((b.name ?? b.prefix.toString()).toLowerCase()));
+    final routes = [
+      for (final r in widget.store.routes)
+        if (r.sectionId == cell.id) r, // this square's own routes
+    ]..sort((a, b) => a.routeId.compareTo(b.routeId));
+    String ageText(int lastHeardMs) {
+      final ageMin = ((nowMs - lastHeardMs) / 60000).round();
+      return ageMin < 60
+          ? '$ageMin min'
+          : ageMin < 1440
+              ? '${ageMin ~/ 60} h'
+              : '${ageMin ~/ 1440} d';
+    }
+    return DefaultTabController(
+      length: 2,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Material(
+            color: Theme.of(context).colorScheme.surfaceContainer,
+            child: const TabBar(tabs: [
+              Tab(text: 'Nodes'),
+              Tab(text: 'Routes'),
+            ]),
+          ),
+          Expanded(
+            child: TabBarView(
+              children: [
+                ListView.builder(
+                  itemCount: nodes.length,
+                  itemBuilder: (context, i) {
+                    final n = nodes[i];
+                    return ListTile(
+                      dense: true,
+                      key: ValueKey('sect-list-node-${n.prefix}'),
+                      leading: const Icon(Icons.place,
+                          color: Color(0xFF4A90D9), size: 20),
+                      title: Text(n.name ?? 'prefix ${n.prefix}'),
+                      subtitle: Text(
+                        'prefix ${n.prefix.toRadixString(16).padLeft(2, '0')}'
+                        ' - heard ${ageText(n.lastHeardMs)} ago',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      onTap: () => _selectNode(n.prefix),
+                    );
+                  },
+                ),
+                ListView.builder(
+                  itemCount: routes.length,
+                  itemBuilder: (context, i) {
+                    final r = routes[i];
+                    return ListTile(
+                      dense: true,
+                      key: ValueKey('sect-list-route-${r.routeId}'),
+                      leading: const Icon(Icons.route, size: 20),
+                      title: Text('route ${r.routeId}'),
+                      subtitle: Text(
+                        '${r.prefixes.length} hop(s)'
+                        ' - ${r.packetCount} packet(s)'
+                        ' - section ${r.sectionId}',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      onTap: () => _selectRoute(r.routeId),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -304,10 +435,12 @@ class _SectionScreenState extends State<SectionScreen> {
         initStyle: mapStyleUrl,
         initCenter: Geographic(lon: c.centerLon, lat: c.centerLat),
         initZoom: _zoomForSpan(c.spanLatM),
-        // THE MAP LOCK (Brett, 2026-09-26): the same law as the main
-        // map - a FIXED close-up of the tapped square, no finger
-        // moves it. Taps still select nodes and route lines.
-        gestures: const MapGestures.none(),
+        // PINCH TO ZOOM (Brett, 2026-09-30: node labels overlap and
+        // taps miss - "we need to be able to zoom in"): the camera
+        // still ignores stray drags and tilts (the map lock's
+        // spirit), but the fingers may zoom - around their own
+        // midpoint, so any crowded cluster is reachable.
+        gestures: const MapGestures.none(zoom: true),
       ),
       onMapCreated: (c) => _map = c,
       onEvent: _onMapEvent,

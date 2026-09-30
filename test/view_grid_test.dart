@@ -92,6 +92,20 @@ void main() {
     );
     expect(a, b);
   });
+
+  test('a section cell knows its own square (the list scope, '
+      '2026-09-30)', () {
+    const cell = SectionCell(
+        id: 5,
+        centerLat: 38.0,
+        centerLon: -122.0,
+        spanLatM: 15000,
+        spanLonM: 20000);
+    expect(cell.contains(38.0, -122.0), isTrue); // dead centre
+    expect(cell.contains(38.02, -122.05), isTrue); // ~2 km N, ~4 km W
+    expect(cell.contains(38.1, -122.0), isFalse); // ~11 km north
+    expect(cell.contains(38.0, -122.2), isFalse); // ~17 km west
+  });
 }
 
 extension _Sum on Iterable<int> {

@@ -637,4 +637,56 @@ void main() {
       expect(gaps, contains('churn \u00b7 hash collisions: not measured yet'));
     });
   });
+
+  group('the time window (Brett, 2026-09-30)', () {
+    test('only facts heard INSIDE the window draw', () {
+      final clinic = _clinic(nowMs, [
+        _chart(prefix: 0x21, lastAgeMin: 3), // 3 min old: in any window
+        _chart(prefix: 0x22, lastAgeMin: 5000), // 3.5 d: outside a day
+        const ClinicRouteFact(
+            source: 0xb17e,
+            path: [0x21, 0x22],
+            uses: 5,
+            direct: 0,
+            delayMinS: 1,
+            delayMedS: 2,
+            delayMaxS: 3,
+            lastAgeMin: 100,
+            ageDays: 1), // heard 100 min ago
+      ]);
+      final store = _store(nowMs: nowMs);
+      int nodeMarks(ClinicLayer l) =>
+          l.markers.where((m) => m.target is ClinicNodeTarget).length;
+
+      final oneDay = ClinicLayerVM.build(clinic, store, ClinicView.all,
+          nowMs: nowMs, windowMin: 1440);
+      expect(nodeMarks(oneDay), 1); // 0x22 falls outside the day
+      expect(oneDay.lines, hasLength(1)); // the route is inside
+
+      final oneHour = ClinicLayerVM.build(clinic, store, ClinicView.all,
+          nowMs: nowMs, windowMin: 60);
+      expect(nodeMarks(oneHour), 1);
+      expect(oneHour.lines, isEmpty); // 100 min: outside the hour
+
+      final noWindow = ClinicLayerVM.build(clinic, store, ClinicView.all,
+          nowMs: nowMs);
+      expect(nodeMarks(noWindow), 2);
+      expect(noWindow.lines, hasLength(1));
+    });
+
+    test('an unknown age fits no window - hidden, never invented as '
+        'fresh', () {
+      final clinic = _clinic(nowMs, [
+        _chart(prefix: 0x21, lastAgeMin: ageUnknownMin),
+      ]);
+      final inWindow = ClinicLayerVM.build(
+          clinic, _store(nowMs: nowMs), ClinicView.nodes,
+          nowMs: nowMs, windowMin: 20160);
+      expect(inWindow.markers, isEmpty);
+      final noWindow = ClinicLayerVM.build(
+          clinic, _store(nowMs: nowMs), ClinicView.nodes,
+          nowMs: nowMs);
+      expect(noWindow.markers, hasLength(1));
+    });
+  });
 }

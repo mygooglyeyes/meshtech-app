@@ -67,11 +67,18 @@ class _MapScreenState extends State<MapScreen> {
   ViewGrid? _grid; // THE PHONE'S 3x4 VIEW GRID on the visible region
   int _overlayTick = 0; // bumped = labels/grid recompute their spots
 
-  /// THE CLINIC VIEW (Brett's pick): which fact family the simple
-  /// health layer draws - all facts / node health / route health /
-  /// trouble flags / second-hand peer reports. Switching views only
-  /// changes the DRAWING (rule 2) - never an ask, never a removal.
-  ClinicView _clinicView = ClinicView.all;
+  /// THE CLINIC VIEW (Brett's pick; "All facts" chip REMOVED
+  /// 2026-09-30 - it drew every route at once and drowned the map):
+  /// which fact family the simple health layer draws - node health /
+  /// route health / trouble flags / second-hand peer reports.
+  /// Opens on NODE HEALTH. Switching views only changes the DRAWING
+  /// (rule 2) - never an ask, never a removal.
+  ClinicView _clinicView = ClinicView.nodes;
+
+  /// THE TIME WINDOW (Brett, 2026-09-30): only facts heard inside
+  /// the window draw. The better way to show the routes - "Route
+  /// health + 4 hrs" beats 4,000 lines at once. Opens on 1 day.
+  int _clinicWindowMin = 1440;
   ClinicLayer? _clinicLayer; // last build's layer (tap targeting)
 
   /// The tap's tolerance as a FINGER'S WIDTH on the tall map: a
@@ -138,7 +145,7 @@ class _MapScreenState extends State<MapScreen> {
     // fact with no place draws nowhere - counted out loud below.
     final clinic =
         ClinicLayerVM.build(widget.clinic, widget.store, _clinicView,
-            nowMs: nowMs);
+            nowMs: nowMs, windowMin: _clinicWindowMin);
     _clinicLayer = clinic; // tap targeting reads it between builds
     List<Feature<Point>> clinicDots(ClinicColor c) => [
           for (final m in clinic.markers)
@@ -525,30 +532,59 @@ class _MapScreenState extends State<MapScreen> {
               ],
             ),
           ),
-          // THE CLINIC VIEWS (Mesh Clinic v2, Brett's pick): the
-          // five fact-family views on the ONE map. Switching a view
-          // redraws ONLY (rule 2) - no ask, no spend.
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
+          // THE CLINIC VIEWS (Mesh Clinic v2, Brett's pick; "All
+          // facts" REMOVED 2026-09-30 - one chip drew every route at
+          // once and drowned the map): the fact-family views on the
+          // ONE map. Switching a view redraws ONLY (rule 2) - no
+          // ask, no spend. THE TIME WINDOW (Brett, same day): a
+          // dropdown beside the chips - only facts heard inside the
+          // window draw, so routes show as "the last 4 hrs".
+          Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8),
             child: Row(
               children: [
-                for (final (view, name) in const [
-                  (ClinicView.all, 'All facts'),
-                  (ClinicView.nodes, 'Node health'),
-                  (ClinicView.routes, 'Route health'),
-                  (ClinicView.trouble, 'Trouble flags'),
-                  (ClinicView.secondHand, 'Second-hand'),
-                ])
-                  Padding(
-                    padding: const EdgeInsets.only(right: 4),
-                    child: ChoiceChip(
-                      label: Text(name,
-                          style: const TextStyle(fontSize: 11)),
-                      selected: _clinicView == view,
-                      onSelected: (_) => setState(() => _clinicView = view),
+                Expanded(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        for (final (view, name) in const [
+                          (ClinicView.nodes, 'Node health'),
+                          (ClinicView.routes, 'Route health'),
+                          (ClinicView.trouble, 'Trouble flags'),
+                          (ClinicView.secondHand, 'Second-hand'),
+                        ])
+                          Padding(
+                            padding: const EdgeInsets.only(right: 4),
+                            child: ChoiceChip(
+                              label: Text(name,
+                                  style: const TextStyle(fontSize: 11)),
+                              selected: _clinicView == view,
+                              onSelected: (_) =>
+                                  setState(() => _clinicView = view),
+                            ),
+                          ),
+                      ],
                     ),
                   ),
+                ),
+                DropdownButton<int>(
+                  key: const ValueKey('clinic-window'),
+                  value: _clinicWindowMin,
+                  isDense: true,
+                  style: const TextStyle(fontSize: 11, color: Colors.white),
+                  dropdownColor: const Color(0xFF123B63),
+                  items: const [
+                    DropdownMenuItem(value: 60, child: Text('1 hr')),
+                    DropdownMenuItem(value: 240, child: Text('4 hrs')),
+                    DropdownMenuItem(value: 720, child: Text('12 hrs')),
+                    DropdownMenuItem(value: 1440, child: Text('1 day')),
+                    DropdownMenuItem(value: 10080, child: Text('7 days')),
+                    DropdownMenuItem(value: 20160, child: Text('14 days')),
+                  ],
+                  onChanged: (v) => setState(
+                      () => _clinicWindowMin = v ?? _clinicWindowMin),
+                ),
               ],
             ),
           ),
