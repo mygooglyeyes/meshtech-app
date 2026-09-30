@@ -621,9 +621,9 @@ class ClinicCards {
   }
 
   // THE HEALTH REPORT'S HONEST GAPS (Brett, 2026-09-29): facts the
-  // mesh does not carry yet, named out loud - never invented.
-  static const _gapAirtime =
-      'duplicates \u00b7 occupancy \u00b7 duty headroom: not measured yet';
+  // wire carries NO version of, named out loud - never invented.
+  // The node card fills its gaps measurement by measurement (035);
+  // the route card keeps these (the wire has no route-scoped facts).
   static const _gapDelivery = 'loss \u00b7 retries \u00b7 reordering \u00b7 '
       'request\u2192answer: not measured yet';
   static const _gapStability =
@@ -650,6 +650,18 @@ class ClinicCards {
     final out = <HealthRow>[];
     final charts = clinic.nodeFactsFor(prefix);
     final flags = clinic.flagsFor(prefix);
+    // THE HEALTH NUMBERS (kinds 5-8, app 035): the mesh's air and
+    // the senders' behavior are NOT one node's facts - they ride
+    // their box's chip, and only the TOP SENDERS appear (Brett's
+    // rule 2026-09-29: most lost first; a sender-to-node
+    // 'connection' does not exist on the wire, so none is claimed).
+    final air = [...clinic.airtimeFacts]
+      ..sort((a, b) => a.source.compareTo(b.source));
+    final senders = _topSenders(clinic.senderFacts);
+    final exchange = [...clinic.exchangeFacts]
+      ..sort((a, b) => a.source.compareTo(b.source));
+    final collisions = [...clinic.collisionFacts]
+      ..sort((a, b) => a.source.compareTo(b.source));
     if (charts.isEmpty) out.add(const HealthNote('no chart yet'));
     var chip = '';
     void family(String name) {
@@ -686,7 +698,19 @@ class ClinicCards {
       wear(row.label);
       out.add(_flagRow(row, nowMs));
     }
-    out.add(const HealthGap(_gapAirtime));
+    for (final row in air) {
+      wear(row.label);
+      out.add(HealthNote(_airText(row)));
+    }
+    for (final row in senders) {
+      wear(row.label);
+      out.add(HealthNote('sender ${tagHex(row.fact.sender)}: duplicates '
+          '${perMillePct(row.fact.dupPerMille)}'));
+    }
+    _gapRows(out, [
+      if (air.isEmpty && senders.isEmpty) 'duplicates',
+      if (air.isEmpty) ...['occupancy', 'duty headroom'],
+    ]);
 
     family('Delivery reliability & latency');
     for (final row in charts) {
@@ -702,7 +726,21 @@ class ClinicCards {
       out.add(HealthNote('${routeTitle(f.path)} \u00b7 ${f.uses} uses \u00b7 '
           'last ${ageText(row.ageMin(f.lastAgeMin, nowMs))}'));
     }
-    out.add(const HealthGap(_gapDelivery));
+    for (final row in exchange) {
+      wear(row.label);
+      out.add(HealthNote(_exchangeText(row)));
+    }
+    for (final row in senders) {
+      wear(row.label);
+      out.add(HealthNote('sender ${tagHex(row.fact.sender)}: '
+          'lost ${row.fact.lost} \u00b7 reordered ${row.fact.reordered}'));
+    }
+    _gapRows(out, [
+      if (senders.isEmpty) 'loss',
+      'retries',
+      if (senders.isEmpty) 'reordering',
+      if (exchange.isEmpty) 'request\u2192answer',
+    ]);
 
     family('Stability & hygiene');
     for (final row in charts) {
@@ -719,7 +757,19 @@ class ClinicCards {
       wear(row.label);
       out.add(_flagRow(row, nowMs));
     }
-    out.add(const HealthGap(_gapStability));
+    for (final row in collisions) {
+      wear(row.label);
+      out.add(HealthNote(_collisionText(row, nowMs)));
+    }
+    for (final row in senders) {
+      wear(row.label);
+      out.add(HealthNote(
+          'sender ${tagHex(row.fact.sender)}: flaps ${row.fact.flaps}'));
+    }
+    _gapRows(out, [
+      if (senders.isEmpty) 'churn',
+      if (collisions.isEmpty) 'hash collisions',
+    ]);
     return out;
   }
 
@@ -771,6 +821,61 @@ class ClinicCards {
     family('Stability & hygiene');
     out.add(const HealthGap(_gapStability));
     return out;
+  }
+
+  /// Brett's top-3 rule (2026-09-29): most lost first, ties broken
+  /// by flaps, then reordering, then duplicates. The wire carries no
+  /// sender-to-node connection, so none is ever claimed.
+  static List<ClinicRow<ClinicSenderFact>> _topSenders(
+      Iterable<ClinicRow<ClinicSenderFact>> rows) {
+    final all = [...rows];
+    all.sort((a, b) {
+      final f = a.fact, g = b.fact;
+      if (g.lost != f.lost) return g.lost.compareTo(f.lost);
+      if (g.flaps != f.flaps) return g.flaps.compareTo(f.flaps);
+      if (g.reordered != f.reordered) {
+        return g.reordered.compareTo(f.reordered);
+      }
+      return g.dupPerMille.compareTo(f.dupPerMille);
+    });
+    return all.take(3).toList();
+  }
+
+  /// What the card still cannot show, named out loud.
+  static void _gapRows(List<HealthRow> out, List<String> missing) {
+    if (missing.isEmpty) return;
+    out.add(HealthGap('${missing.join(' \u00b7 ')}: not measured yet'));
+  }
+
+  static String _airText(ClinicRow<ClinicAirtimeFact> row) {
+    final f = row.fact;
+    final parts = <String>[
+      'duplicates ${perMillePct(f.dupPerMille)}',
+      'occupancy ${perMillePct(f.occupancyPerMille)}',
+      f.dutyHeadroomS == numUnknown
+          ? 'duty headroom unknown'
+          : 'duty headroom ${f.dutyHeadroomS} s',
+    ];
+    if (f.txUsedS != numUnknown) {
+      parts.add('sent ${f.txUsedS} s');
+    }
+    return parts.join(' \u00b7 ');
+  }
+
+  static String _exchangeText(ClinicRow<ClinicExchangeFact> row) {
+    final f = row.fact;
+    final med =
+        f.medianAnswerS == 0 ? 'median unknown' : 'median ${f.medianAnswerS} s';
+    return 'ask\u2192answer: asked ${f.asked} \u00b7 answered ${f.answered}'
+        ' \u00b7 $med';
+  }
+
+  static String _collisionText(ClinicRow<ClinicCollisionFact> row, int nowMs) {
+    final f = row.fact;
+    final tag =
+        f.tag.map((t) => t.toRadixString(16).padLeft(2, '0')).join('-');
+    return 'hash collision: tag $tag carried two different keys \u00b7 '
+        'proven ${ageText(row.ageMin(f.lastAgeMin, nowMs))}';
   }
 
   /// The margin rows: one fixed-scale bar per signal kind. Missing

@@ -59,6 +59,11 @@ class FakeBleTransport implements BleTransport {
     connectedTo = pick;
   }
 
+  /// What ensurePaired reports (the pairing-note log test).
+  String pairedNote = '';
+  @override
+  Future<String> ensurePaired() async => pairedNote;
+
   @override
   Future<void> write(Uint8List data) async {
     writes.add(Uint8List.fromList(data));
@@ -137,6 +142,30 @@ void main() {
         probeSummaryDelay: const Duration(milliseconds: 60),
         retryPause: const Duration(milliseconds: 10),
       );
+
+  test('the pairing note lands in the log - the phone symbol story '
+      '(Brett, 2026-09-29)', () async {
+    final fake = FakeBleTransport()
+      ..pairedNote = 'pairing did not finish (test) - the phone will not'
+          ' show its Bluetooth symbol; the link is fine';
+    final logs = <String>[];
+    final link = buildLink(LinkEvents(onLog: logs.add), fake);
+
+    await link.connect();
+    expect(link.state, LinkState.connected);
+    expect(logs.any((l) => l.contains('pairing did not finish')), isTrue);
+  });
+
+  test('a clean pairing says nothing - empty note = nothing to report',
+      () async {
+    final fake = FakeBleTransport();
+    final logs = <String>[];
+    final link = buildLink(LinkEvents(onLog: logs.add), fake);
+
+    await link.connect();
+    expect(link.state, LinkState.connected);
+    expect(logs.any((l) => l.contains('Bluetooth symbol')), isFalse);
+  });
 
   test('connect runs the proven init: APP_START, device query, poll',
       () async {

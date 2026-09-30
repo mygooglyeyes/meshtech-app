@@ -94,6 +94,9 @@ class AutoRadio implements BleTransport {
   }
 
   @override
+  Future<String> ensurePaired() async => '';
+
+  @override
   Future<void> write(Uint8List data) async {
     writes.add(Uint8List.fromList(data));
     if (data.isEmpty) return;

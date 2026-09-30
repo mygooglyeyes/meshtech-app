@@ -116,6 +116,10 @@ class IoUsbTransport implements BleTransport {
   }
 
   @override
+  Future<String> ensurePaired() async =>
+      ''; // USB needs no pairing - the symbol is a Bluetooth thing
+
+  @override
   Future<void> write(Uint8List data) async {
     final port = _port;
     if (port == null) {

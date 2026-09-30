@@ -56,6 +56,8 @@ class FakeBle implements BleTransport {
   @override
   Future<void> connect(BleCandidate pick) async {}
   @override
+  Future<String> ensurePaired() async => '';
+  @override
   Future<void> write(Uint8List data) async {}
   @override
   Future<void> close() async {}

@@ -53,9 +53,18 @@ int growAgeMin(int wireAgeMin, int heardMs, int nowMs) {
 /// wire's u16 as hex - honest identity, no invented names (the tag is
 /// a boot-random number, so it carries no name to quote).
 String provenanceLabel(int source, int viaOrigin) {
-  final head = source.toRadixString(16).padLeft(4, '0');
+  final head = tagHex(source);
   return source == viaOrigin ? 'Direct ($head)' : 'Reported ($head)';
 }
+
+/// The wire's u16 tag as 4-hex - the honest identity of a box or
+/// sender (a boot-random number, so it carries no name to quote).
+String tagHex(int tag) => tag.toRadixString(16).padLeft(4, '0');
+
+/// Per-mille rides the health wire (kinds 5-6); the words show
+/// percent, and numUnknown stays 'unknown' - never a pinned zero.
+String perMillePct(int perMille) =>
+    perMille == numUnknown ? 'unknown' : '${_sharePct(perMille)}%';
 
 /// THE FLAG TABLE'S EXACT WORDS (CLINIC-WIRE.md: "meaning (exact
 /// words shown to people)"). A flag is evidence, not a verdict - the
@@ -93,6 +102,10 @@ class ClinicRow<T> {
         ClinicRouteFact(:final source) => source,
         ClinicFlagFact(:final source) => source,
         ClinicPeerFact(:final source) => source,
+        ClinicAirtimeFact(:final source) => source,
+        ClinicSenderFact(:final source) => source,
+        ClinicExchangeFact(:final source) => source,
+        ClinicCollisionFact(:final source) => source,
         _ => 0,
       };
 
@@ -132,11 +145,22 @@ class ClinicStore {
   final Map<(String, int), ClinicRow<ClinicRouteFact>> _routes = {};
   final Map<(int, int, int), ClinicRow<ClinicFlagFact>> _flags = {};
   final Map<(int, int, int), ClinicRow<ClinicPeerFact>> _peers = {};
+  // The health facts (kinds 5-8): session facts from the boxes that
+  // measure them - air/exchange/collision per box, sender per tag.
+  final Map<int, ClinicRow<ClinicAirtimeFact>> _air = {};
+  final Map<(int, int), ClinicRow<ClinicSenderFact>> _senders = {};
+  final Map<int, ClinicRow<ClinicExchangeFact>> _exchange = {};
+  final Map<(String, int), ClinicRow<ClinicCollisionFact>> _collisions = {};
 
   Iterable<ClinicRow<ClinicNodeFact>> get nodeFacts => _nodes.values;
   Iterable<ClinicRow<ClinicRouteFact>> get routeFacts => _routes.values;
   Iterable<ClinicRow<ClinicFlagFact>> get flagFacts => _flags.values;
   Iterable<ClinicRow<ClinicPeerFact>> get peerFacts => _peers.values;
+  Iterable<ClinicRow<ClinicAirtimeFact>> get airtimeFacts => _air.values;
+  Iterable<ClinicRow<ClinicSenderFact>> get senderFacts => _senders.values;
+  Iterable<ClinicRow<ClinicExchangeFact>> get exchangeFacts => _exchange.values;
+  Iterable<ClinicRow<ClinicCollisionFact>> get collisionFacts =>
+      _collisions.values;
 
   /// Fold one heard CLINIC packet (both pipes land here - the store
   /// is the one place facts live, whatever carried them).
@@ -155,11 +179,24 @@ class ClinicStore {
         case ClinicPeerFact():
           _peers[(record.report, record.subject, record.source)] =
               ClinicRow(fact: record, viaOrigin: packet.origin, heardMs: heardMs);
+        case ClinicAirtimeFact():
+          _air[record.source] =
+              ClinicRow(fact: record, viaOrigin: packet.origin, heardMs: heardMs);
+        case ClinicSenderFact():
+          _senders[(record.sender, record.source)] =
+              ClinicRow(fact: record, viaOrigin: packet.origin, heardMs: heardMs);
+        case ClinicExchangeFact():
+          _exchange[record.source] =
+              ClinicRow(fact: record, viaOrigin: packet.origin, heardMs: heardMs);
+        case ClinicCollisionFact():
+          _collisions[(_tagKey(record.tag), record.source)] =
+              ClinicRow(fact: record, viaOrigin: packet.origin, heardMs: heardMs);
       }
     }
   }
 
   static String _pathKey(List<int> path) => path.join(',');
+  static String _tagKey(List<int> tag) => tag.join(',');
 
   // ------------------------------------------------------------- queries
 

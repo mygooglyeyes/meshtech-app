@@ -96,6 +96,10 @@ class IoWifiTransport implements BleTransport {
   }
 
   @override
+  Future<String> ensurePaired() async =>
+      ''; // network needs no pairing - the symbol is a Bluetooth thing
+
+  @override
   Future<void> write(Uint8List data) async {
     final socket = _socket;
     if (socket == null) {

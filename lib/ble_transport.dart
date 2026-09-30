@@ -44,6 +44,14 @@ abstract class BleTransport {
   /// Throws plain words (BleRefusal) on failure.
   Future<void> connect(BleCandidate pick);
 
+  /// Make sure the phone is PAIRED with the radio - the phone shows
+  /// its own Bluetooth symbol only for a paired device (Brett,
+  /// 2026-09-29). Returns a plain-words note ('' = nothing to
+  /// report - pairing fine, or this carrier has no pairing). Never
+  /// fatal: an unpaired link still works, the symbol just stays
+  /// hidden.
+  Future<String> ensurePaired();
+
   /// One command frame to the radio (the companion protocol's bare
   /// [type][data] shape - NO length prefix, per the live-link lesson).
   Future<void> write(Uint8List data);

@@ -910,6 +910,10 @@ const int clinicKindNode = 1;
 const int clinicKindRoute = 2;
 const int clinicKindFlag = 3;
 const int clinicKindPeer = 4;
+const int clinicKindAirtime = 5;
+const int clinicKindSender = 6;
+const int clinicKindExchange = 7;
+const int clinicKindCollision = 8;
 
 // Trouble flags (kind 3) - FACTS with evidence, never verdicts.
 const int flagSigFail = 1;
@@ -928,6 +932,7 @@ const int ageUnknownMin = 0xFFFF; // minute fields: older than the wire says
 const int shareUnknownPct = 255; // node fact: no identified traffic counted
 const int signalUnknown = -128; // i8 signal stats: no samples
 const int signalSdUnknown = 255; // u8 signal spread: fewer than 2 samples
+const int numUnknown = 0xFFFF; // health counts (kinds 5-8): never counted
 
 class ClinicNodeFact {
   // Kind 1: one node's chart as THIS box heard it (20 B payload).
@@ -1035,6 +1040,82 @@ class ClinicPeerFact {
   });
 }
 
+class ClinicAirtimeFact {
+  // Kind 5: the mesh's air, as THIS box counts it (12 B payload).
+  // Per-mille fields carry numUnknown = never counted; windowMin is
+  // the counting window's REAL length (60 = a full hour).
+  final int source;
+  final int windowMin;
+  final int dupPerMille;
+  final int occupancyPerMille;
+  final int dutyHeadroomS;
+  final int txUsedS;
+  const ClinicAirtimeFact({
+    required this.source,
+    required this.windowMin,
+    required this.dupPerMille,
+    required this.occupancyPerMille,
+    required this.dutyHeadroomS,
+    required this.txUsedS,
+  });
+}
+
+class ClinicSenderFact {
+  // Kind 6: one sender's behavior (14 B payload) - the tag the
+  // traffic self-identifies with (the scope header's 2-byte origin).
+  // NOT the map's node key: sender facts are never pinned to a node.
+  final int source;
+  final int sender;
+  final int windowMin;
+  final int dupPerMille;
+  final int lost;
+  final int reordered;
+  final int flaps;
+  const ClinicSenderFact({
+    required this.source,
+    required this.sender,
+    required this.windowMin,
+    required this.dupPerMille,
+    required this.lost,
+    required this.reordered,
+    required this.flaps,
+  });
+}
+
+class ClinicExchangeFact {
+  // Kind 7: overheard asks answered (10 B payload). The window is
+  // honest; medianAnswerS 0 = unknown.
+  final int source;
+  final int windowMin;
+  final int asked;
+  final int answered;
+  final int medianAnswerS;
+  const ClinicExchangeFact({
+    required this.source,
+    required this.windowMin,
+    required this.asked,
+    required this.answered,
+    required this.medianAnswerS,
+  });
+}
+
+class ClinicCollisionFact {
+  // Kind 8: one PROVEN hash collision (22..24 B payload) - the same
+  // short tag carried TWO different advert keys on air.
+  final int source;
+  final List<int> tag; // 1..3 bytes, as heard
+  final List<int> keyA; // 8-byte pubkey prefix
+  final List<int> keyB;
+  final int lastAgeMin;
+  const ClinicCollisionFact({
+    required this.source,
+    required this.tag,
+    required this.keyA,
+    required this.keyB,
+    required this.lastAgeMin,
+  });
+}
+
 class Clinic {
   final int seq;
   final int origin; // the box SENDING this packet
@@ -1062,6 +1143,10 @@ int _clinicKind(Object record) => switch (record) {
       ClinicRouteFact() => clinicKindRoute,
       ClinicFlagFact() => clinicKindFlag,
       ClinicPeerFact() => clinicKindPeer,
+      ClinicAirtimeFact() => clinicKindAirtime,
+      ClinicSenderFact() => clinicKindSender,
+      ClinicExchangeFact() => clinicKindExchange,
+      ClinicCollisionFact() => clinicKindCollision,
       _ => throw CodecError('unknown clinic record ${record.runtimeType}'),
     };
 
@@ -1191,6 +1276,69 @@ Uint8List encodeClinicRecord(Object record) {
       } else {
         throw CodecError('unknown peer report kind ${record.report}');
       }
+    case ClinicAirtimeFact():
+      final f = Uint8List(12);
+      final bd = ByteData.view(f.buffer);
+      bd.setUint16(0, _u16(record.source, 'airtime source'), Endian.little);
+      bd.setUint16(2, _u16(record.windowMin, 'airtime window_min'),
+          Endian.little);
+      bd.setUint16(4, _u16(record.dupPerMille, 'airtime dup_per_mille'),
+          Endian.little);
+      bd.setUint16(6,
+          _u16(record.occupancyPerMille, 'airtime occupancy_per_mille'),
+          Endian.little);
+      bd.setUint16(8, _u16(record.dutyHeadroomS, 'airtime duty_headroom_s'),
+          Endian.little);
+      bd.setUint16(10, _u16(record.txUsedS, 'airtime tx_used_s'),
+          Endian.little);
+      body.add(f);
+    case ClinicSenderFact():
+      final f = Uint8List(14);
+      final bd = ByteData.view(f.buffer);
+      bd.setUint16(0, _u16(record.source, 'sender source'), Endian.little);
+      bd.setUint16(2, _u16(record.sender, 'sender tag'), Endian.little);
+      bd.setUint16(4, _u16(record.windowMin, 'sender window_min'),
+          Endian.little);
+      bd.setUint16(6, _u16(record.dupPerMille, 'sender dup_per_mille'),
+          Endian.little);
+      bd.setUint16(8, _u16(record.lost, 'sender lost'), Endian.little);
+      bd.setUint16(10, _u16(record.reordered, 'sender reordered'),
+          Endian.little);
+      bd.setUint16(12, _u16(record.flaps, 'sender flaps'), Endian.little);
+      body.add(f);
+    case ClinicExchangeFact():
+      final f = Uint8List(10);
+      final bd = ByteData.view(f.buffer);
+      bd.setUint16(0, _u16(record.source, 'exchange source'), Endian.little);
+      bd.setUint16(2, _u16(record.windowMin, 'exchange window_min'),
+          Endian.little);
+      bd.setUint16(4, _u16(record.asked, 'exchange asked'), Endian.little);
+      bd.setUint16(6, _u16(record.answered, 'exchange answered'),
+          Endian.little);
+      bd.setUint16(8, _u16(record.medianAnswerS, 'exchange median_answer_s'),
+          Endian.little);
+      body.add(f);
+    case ClinicCollisionFact(:final tag, :final keyA, :final keyB):
+      if (tag.isEmpty || tag.length > 3) {
+        throw CodecError('collision tag length ${tag.length} outside 1..3');
+      }
+      // Refuse loudly - never pad a key (the wire page's law).
+      if (keyA.length != 8 || keyB.length != 8) {
+        throw CodecError('collision keys must be 8 bytes - refuse to mint');
+      }
+      final head = Uint8List(3);
+      final bd = ByteData.view(head.buffer);
+      bd.setUint16(0, _u16(record.source, 'collision source'), Endian.little);
+      head[2] = tag.length;
+      body.add(head);
+      body.add([for (final t in tag) _u8(t, 'collision tag byte')]);
+      body.add(keyA);
+      body.add(keyB);
+      final tail = Uint8List(2);
+      ByteData.view(tail.buffer)
+          .setUint16(0, _u16(record.lastAgeMin, 'collision last_age_min'),
+              Endian.little);
+      body.add(tail);
     default:
       throw CodecError('unknown clinic record ${record.runtimeType}');
   }
@@ -1372,6 +1520,63 @@ Uint8List encodeClinic(List<Object> records,
         lat: lat,
         lon: lon,
         name: name,
+      );
+      return (record, off);
+    case clinicKindAirtime:
+      if (body.length != 12) {
+        throw CodecError(
+            'CLINIC airtime fact must be 12 B, got ${body.length}');
+      }
+      final record = ClinicAirtimeFact(
+        source: bd.getUint16(0, Endian.little),
+        windowMin: bd.getUint16(2, Endian.little),
+        dupPerMille: bd.getUint16(4, Endian.little),
+        occupancyPerMille: bd.getUint16(6, Endian.little),
+        dutyHeadroomS: bd.getUint16(8, Endian.little),
+        txUsedS: bd.getUint16(10, Endian.little),
+      );
+      return (record, off);
+    case clinicKindSender:
+      if (body.length != 14) {
+        throw CodecError('CLINIC sender fact must be 14 B, got ${body.length}');
+      }
+      final record = ClinicSenderFact(
+        source: bd.getUint16(0, Endian.little),
+        sender: bd.getUint16(2, Endian.little),
+        windowMin: bd.getUint16(4, Endian.little),
+        dupPerMille: bd.getUint16(6, Endian.little),
+        lost: bd.getUint16(8, Endian.little),
+        reordered: bd.getUint16(10, Endian.little),
+        flaps: bd.getUint16(12, Endian.little),
+      );
+      return (record, off);
+    case clinicKindExchange:
+      if (body.length != 10) {
+        throw CodecError(
+            'CLINIC exchange fact must be 10 B, got ${body.length}');
+      }
+      final record = ClinicExchangeFact(
+        source: bd.getUint16(0, Endian.little),
+        windowMin: bd.getUint16(2, Endian.little),
+        asked: bd.getUint16(4, Endian.little),
+        answered: bd.getUint16(6, Endian.little),
+        medianAnswerS: bd.getUint16(8, Endian.little),
+      );
+      return (record, off);
+    case clinicKindCollision:
+      if (body.length < 3) {
+        throw CodecError('CLINIC collision fact too short');
+      }
+      final tagLen = body[2];
+      if (tagLen < 1 || tagLen > 3 || body.length != 3 + tagLen + 18) {
+        throw CodecError('CLINIC collision fact malformed');
+      }
+      final record = ClinicCollisionFact(
+        source: bd.getUint16(0, Endian.little),
+        tag: List<int>.from(body.sublist(3, 3 + tagLen)),
+        keyA: List<int>.from(body.sublist(3 + tagLen, 3 + tagLen + 8)),
+        keyB: List<int>.from(body.sublist(3 + tagLen + 8, 3 + tagLen + 16)),
+        lastAgeMin: bd.getUint16(3 + tagLen + 16, Endian.little),
       );
       return (record, off);
     default:

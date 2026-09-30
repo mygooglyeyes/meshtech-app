@@ -370,4 +370,50 @@ void main() {
       expect(provenanceLabel(0x0001, 0xb17e), 'Reported (0001)');
     });
   });
+
+  group('health facts (kinds 5-8) fold like every other fact', () {
+    test('one row per (identity, box) - newest receipt wins, '
+        'provenance rides along', () {
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      final c = ClinicStore();
+      c.fold(
+          Clinic(seq: 1, origin: 0xb17e, records: const [
+            ClinicAirtimeFact(
+                source: 0xb17e,
+                windowMin: 60,
+                dupPerMille: 286,
+                occupancyPerMille: 167,
+                dutyHeadroomS: 3500,
+                txUsedS: 100),
+            ClinicSenderFact(
+                source: 0xbeef,
+                sender: 0x1234,
+                windowMin: 1440,
+                dupPerMille: 0,
+                lost: 4,
+                reordered: 1,
+                flaps: 1),
+          ]),
+          heardMs: nowMs);
+      c.fold(
+          Clinic(seq: 2, origin: 0xb17e, records: const [
+            ClinicSenderFact(
+                source: 0xbeef,
+                sender: 0x1234,
+                windowMin: 1440,
+                dupPerMille: 0,
+                lost: 5,
+                reordered: 1,
+                flaps: 1),
+          ]),
+          heardMs: nowMs + 60000);
+      expect(c.airtimeFacts.length, 1);
+      expect(c.senderFacts.length, 1); // same (tag, box): replaced
+      expect(c.senderFacts.single.fact.lost, 5); // newest receipt wins
+      expect(c.airtimeFacts.single.label, 'Direct (b17e)');
+      expect(c.senderFacts.single.label, 'Reported (beef)');
+      // The honest age grows from receipt, never frozen.
+      expect(c.senderFacts.single.ageMin(0, nowMs + 120000), 1);
+    });
+  });
 }

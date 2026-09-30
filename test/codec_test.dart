@@ -37,6 +37,12 @@ const Map<String, String> golden = {
   // same bytes (tests/golden_vectors.json "clinic").
   'clinic':
       '14534f0513017eb10401147eb12103000500070080022514240410a6b09c0a02127eb102112238000002000400090011000200030c7eb1022102001e000500f401040fefbe0100000400d204040028000900',
+  // clinic_health: the health records (kinds 5-8, CLINIC-WIRE.md) -
+  // airtime / sender / exchange / collision. Generated with the
+  // node's tools/gen_golden.py: the two repos' goldens stay pinned
+  // to the same bytes (tests/golden_vectors.json "clinic_health").
+  'clinic_health':
+      '1453490514017eb104050c7eb13c0090010c00ac0d6400060e7eb134127800fa00020001000300070a7eb13c0004000300090008177eb10221330102030405060708a1a2a3a4a5a6a7a80700',
 };
 
 Uint8List bytesOf(String hex) => Uint8List.fromList([
@@ -345,6 +351,80 @@ void clinicTests() {
       expect((c.records[1] as ClinicRouteFact).source, c.origin);
       expect((c.records[2] as ClinicFlagFact).source, c.origin);
       expect((c.records[3] as ClinicPeerFact).source, isNot(c.origin));
+    });
+  });
+
+  group('CLINIC HEALTH golden vector (kinds 5-8)', () {
+    test('decodes to the reference fields and re-encodes byte-identical',
+        () {
+      final c = decodeGolden<Clinic>(golden['clinic_health']!);
+      expect(c.seq, 276);
+      expect(c.origin, 0xb17e);
+      expect(c.records.length, 4);
+
+      final a = c.records[0] as ClinicAirtimeFact;
+      expect(a.source, 0xb17e);
+      expect(a.windowMin, 60); // the REAL window, never a claim
+      expect(a.dupPerMille, 400);
+      expect(a.occupancyPerMille, 12);
+      expect(a.dutyHeadroomS, 3500);
+      expect(a.txUsedS, 100);
+
+      final s = c.records[1] as ClinicSenderFact;
+      expect(s.source, 0xb17e);
+      expect(s.sender, 0x1234);
+      expect(s.windowMin, 120);
+      expect(s.dupPerMille, 250);
+      expect(s.lost, 2);
+      expect(s.reordered, 1);
+      expect(s.flaps, 3);
+
+      final e = c.records[2] as ClinicExchangeFact;
+      expect(e.source, 0xb17e);
+      expect(e.windowMin, 60);
+      expect(e.asked, 4);
+      expect(e.answered, 3);
+      expect(e.medianAnswerS, 9);
+
+      final k = c.records[3] as ClinicCollisionFact;
+      expect(k.source, 0xb17e);
+      expect(k.tag, [0x21, 0x33]);
+      expect(k.keyA, [1, 2, 3, 4, 5, 6, 7, 8]);
+      expect(k.keyB, [0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8]);
+      expect(k.lastAgeMin, 7);
+
+      expect(hexOf(encodeClinic(c.records, seq: c.seq, origin: c.origin)),
+          golden['clinic_health']);
+    });
+
+    test('a collision refuses a padded or short key - never fabricates', () {
+      expect(
+          () => encodeClinicRecord(const ClinicCollisionFact(
+              source: 1,
+              tag: [0x21],
+              keyA: [1, 2, 3],
+              keyB: [1, 2, 3, 4, 5, 6, 7, 8],
+              lastAgeMin: 0)),
+          throwsCodecError);
+      expect(
+          () => encodeClinicRecord(const ClinicCollisionFact(
+              source: 1,
+              tag: [],
+              keyA: [0, 0, 0, 0, 0, 0, 0, 0],
+              keyB: [1, 2, 3, 4, 5, 6, 7, 8],
+              lastAgeMin: 0)),
+          throwsCodecError);
+    });
+
+    test('health record sizes are strict - a wrong size is loud', () {
+      expect(
+          () => decodeClinicRecord(Uint8List.fromList(
+              [clinicKindAirtime, 11, ...List.filled(11, 0)])),
+          throwsCodecError);
+      expect(
+          () => decodeClinicRecord(Uint8List.fromList(
+              const [clinicKindCollision, 22, 1, 2, 3])),
+          throwsCodecError);
     });
   });
 

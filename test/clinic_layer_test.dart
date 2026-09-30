@@ -531,5 +531,110 @@ void main() {
       expect(notes, contains('Typical hops: unknown'));
       expect(notes, contains('share unknown'));
     });
+
+    test('the health numbers fill the gaps - top 3 senders by most '
+        'lost (Brett, 2026-09-29)', () {
+      final clinic = _clinic(nowMs, [
+        _chart(source: 0xb17e),
+        const ClinicAirtimeFact(
+            source: 0xb17e,
+            windowMin: 60,
+            dupPerMille: 286,
+            occupancyPerMille: 167,
+            dutyHeadroomS: 3500,
+            txUsedS: 100),
+        const ClinicExchangeFact(
+            source: 0xb17e,
+            windowMin: 60,
+            asked: 2,
+            answered: 1,
+            medianAnswerS: 9),
+        // Four senders; only the top 3 by MOST LOST appear.
+        for (final (tag, lost, flaps, re) in [
+          (0x1111, 0, 0, 0),
+          (0x2222, 1, 0, 0),
+          (0x3333, 4, 1, 1),
+          (0x4444, 2, 0, 0),
+        ])
+          ClinicSenderFact(
+              source: 0xb17e,
+              sender: tag,
+              windowMin: 1440,
+              dupPerMille: 0,
+              lost: lost,
+              reordered: re,
+              flaps: flaps),
+        const ClinicCollisionFact(
+            source: 0xb17e,
+            tag: [0x21, 0x33],
+            keyA: [1, 2, 3, 4, 5, 6, 7, 8],
+            keyB: [9, 9, 9, 9, 9, 9, 9, 9],
+            lastAgeMin: 7),
+      ]);
+      final card = ClinicCards.nodeHealthCard(clinic, 0x21, nowMs: nowMs);
+      final notes = [for (final n in card.whereType<HealthNote>()) n.text];
+      final gaps = [for (final g in card.whereType<HealthGap>()) g.text];
+      // The mesh's air replaces the airtime gap.
+      expect(
+          notes,
+          contains('duplicates 28.6% \u00b7 occupancy 16.7% \u00b7 '
+              'duty headroom 3500 s \u00b7 sent 100 s'));
+      expect(
+          notes,
+          contains('ask\u2192answer: asked 2 \u00b7 answered 1'
+              ' \u00b7 median 9 s'));
+      // Top 3 senders ONLY, ranked by most lost (ties: flaps,
+      // reordering, duplicates). Sender tags never claim a node.
+      expect(notes, contains('sender 3333: lost 4 \u00b7 reordered 1'));
+      expect(notes, contains('sender 4444: lost 2 \u00b7 reordered 0'));
+      expect(notes, contains('sender 2222: lost 1 \u00b7 reordered 0'));
+      expect(notes, isNot(contains('sender 1111: lost 0 \u00b7 reordered 0')));
+      expect(notes, contains('sender 3333: flaps 1'));
+      expect(notes, contains('sender 3333: duplicates 0%'));
+      // The proven collision rides its box's chip.
+      expect(
+          notes,
+          contains('hash collision: tag 21-33 carried two different keys'
+              ' \u00b7 proven 7 min ago'));
+      // Measured gaps vanish; the honest ones stay.
+      expect(
+          gaps,
+          isNot(contains('duplicates \u00b7 occupancy \u00b7 duty headroom:'
+              ' not measured yet')));
+      expect(gaps, contains('retries: not measured yet'));
+      expect(gaps,
+          isNot(contains('churn \u00b7 hash collisions: not measured yet')));
+    });
+
+    test('a partially filled family names only what is still missing', () {
+      // Air + ask/answer measured, but NO sender facts: the delivery
+      // gap shrinks to what the wire still cannot say.
+      final clinic = _clinic(nowMs, [
+        _chart(source: 0xb17e),
+        const ClinicAirtimeFact(
+            source: 0xb17e,
+            windowMin: 60,
+            dupPerMille: numUnknown,
+            occupancyPerMille: numUnknown,
+            dutyHeadroomS: numUnknown,
+            txUsedS: numUnknown),
+        const ClinicExchangeFact(
+            source: 0xb17e, windowMin: 60, asked: 1, answered: 1,
+            medianAnswerS: 0),
+      ]);
+      final card = ClinicCards.nodeHealthCard(clinic, 0x21, nowMs: nowMs);
+      final notes = [for (final n in card.whereType<HealthNote>()) n.text];
+      final gaps = [for (final g in card.whereType<HealthGap>()) g.text];
+      // Unknown stays unknown - never a pinned zero.
+      expect(
+          notes,
+          contains('duplicates unknown \u00b7 occupancy unknown \u00b7 '
+              'duty headroom unknown'));
+      expect(notes, contains('ask\u2192answer: asked 1 \u00b7 answered 1'
+          ' \u00b7 median unknown'));
+      expect(gaps, contains('loss \u00b7 retries \u00b7 reordering:'
+          ' not measured yet'));
+      expect(gaps, contains('churn \u00b7 hash collisions: not measured yet'));
+    });
   });
 }

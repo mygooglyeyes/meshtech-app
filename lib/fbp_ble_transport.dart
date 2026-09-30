@@ -166,6 +166,35 @@ class FbpBleTransport implements BleTransport {
   }
 
   @override
+  Future<String> ensurePaired() async {
+    // THE PHONE'S OWN BLUETOOTH SYMBOL (Brett, 2026-09-29): the
+    // phone shows its status-bar Bluetooth symbol for a PAIRED
+    // device - so finish the bond whenever the live link is
+    // unpaired. The PIN box is HUMAN-paced (the same minute of
+    // patience as connect, 2026-09-25). Pairing trouble is honest,
+    // NEVER fatal: the link keeps working, the symbol just stays
+    // hidden.
+    final device = _device;
+    if (device == null) return '';
+    try {
+      var state = await device.bondState.first;
+      if (state == BluetoothBondState.bonding) {
+        // A pairing box is already on screen - wait for its verdict.
+        state = await device.bondState
+            .where((s) => s != BluetoothBondState.bonding)
+            .first
+            .timeout(const Duration(seconds: 90));
+      }
+      if (state == BluetoothBondState.bonded) return '';
+      await device.createBond(timeout: 90);
+      return '';
+    } catch (err) {
+      return 'pairing did not finish ($err) - the phone will not show'
+          ' its Bluetooth symbol; the link is fine';
+    }
+  }
+
+  @override
   Future<void> write(Uint8List data) async {
     final rx = _rxChar;
     if (rx == null) {

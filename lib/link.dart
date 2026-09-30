@@ -629,6 +629,11 @@ class CompanionLink implements Link {
         try {
           await transport.connect(pick);
           _transport = transport;
+          // THE PHONE'S OWN BLUETOOTH SYMBOL (Brett, 2026-09-29):
+          // the bond rides the rock-solid unit - a pairing bounce
+          // retries like any other, and any note lands in the log.
+          final paired = await transport.ensurePaired();
+          if (paired.isNotEmpty) _log(paired);
           final proto = CompanionProtocol(
             transport: transport,
             // Reassembled scope plaintexts are FULL packets (envelope
