@@ -27,6 +27,7 @@ import 'codec.dart';
 import 'companion_protocol.dart'
     show channelSecretHex, scopeChannelName;
 import 'connect_screen.dart';
+import 'detail_screen.dart';
 import 'door_socket.dart';
 import 'link.dart';
 import 'main_page.dart';
@@ -587,6 +588,7 @@ class _MeshtechAppState extends State<MeshtechApp> {
     // answered, so it closes with them (it returns on the map's
     // next tap after a reconnect, never as a stale overlay).
     _closeSection();
+    _closeDetail();
   }
 
   /// THE SIZE BUTTONS: stepping 20/40/60 redraws the SAME held data
@@ -646,6 +648,35 @@ class _MeshtechAppState extends State<MeshtechApp> {
       _openCell = null;
       _sectionHot = const [];
       _sectionSum = null;
+    });
+  }
+
+  /// THE NODE / ROUTE DETAIL PAGE (Brett, 2026-09-30): the lists'
+  /// rows used to do nothing - now a tap rides THIS page over
+  /// everything (its back button returns to the list he came
+  /// from). One detail at a time, like everything on the stack.
+  int _detailPrefix = 0;
+  Route? _detailRoute;
+
+  void _openNodeDetail(int prefix) {
+    setState(() {
+      _detailPrefix = prefix;
+      _detailRoute = null;
+    });
+  }
+
+  void _openRouteDetail(Route route) {
+    setState(() {
+      _detailRoute = route;
+      _detailPrefix = 0;
+    });
+  }
+
+  void _closeDetail() {
+    if (_detailPrefix == 0 && _detailRoute == null) return;
+    setState(() {
+      _detailPrefix = 0;
+      _detailRoute = null;
     });
   }
 
@@ -745,12 +776,19 @@ class _MeshtechAppState extends State<MeshtechApp> {
       theme: _bluelineTheme(),
       home: (_linkState == LinkState.connected && !_airChecking)
           ? PopScope(
-              // THE SYSTEM BACK (Brett, 2026-09-25): while the
-              // detail page is up, back closes IT - never the app
-              // underneath a page still open over the map.
-              canPop: _openSection == 0,
+              // THE SYSTEM BACK (Brett, 2026-09-25): while a page
+              // is up, back closes IT - the TOP page first - never
+              // the app underneath a page still open over the map.
+              canPop: _openSection == 0 &&
+                  _detailPrefix == 0 &&
+                  _detailRoute == null,
               onPopInvokedWithResult: (didPop, _) {
-                if (!didPop) _closeSection();
+                if (didPop) return;
+                if (_detailPrefix != 0 || _detailRoute != null) {
+                  _closeDetail();
+                } else {
+                  _closeSection();
+                }
               },
               child: Stack(
                 children: [
@@ -768,6 +806,8 @@ class _MeshtechAppState extends State<MeshtechApp> {
                     onAsk: _ask,
                     onMapSizeChange: _changeMapSize,
                     onSectionTap: _onSectionTap,
+                    onNodeTap: _openNodeDetail,
+                    onRouteTap: _openRouteDetail,
                     mapBuilder: widget.mapBuilder,
                   ),
                   // THE SECTION DETAIL PAGE (Brett, 2026-09-25):
@@ -785,7 +825,26 @@ class _MeshtechAppState extends State<MeshtechApp> {
                       hotRouteIds: _sectionHot,
                       summary: _sectionSum,
                       onClose: _closeSection,
+                      onNodeTap: _openNodeDetail,
+                      onRouteTap: _openRouteDetail,
                       mapBuilder: widget.mapBuilder,
+                    ),
+                  // THE NODE / ROUTE DETAIL PAGE (Brett, 2026-09-30):
+                  // rides OVER everything, opened from the lists -
+                  // its back button returns to the list he came from.
+                  if (_detailRoute != null)
+                    RouteDetailScreen(
+                      store: _store,
+                      clinic: _clinic,
+                      route: _detailRoute!,
+                      onClose: _closeDetail,
+                    )
+                  else if (_detailPrefix != 0)
+                    NodeDetailScreen(
+                      store: _store,
+                      clinic: _clinic,
+                      prefix: _detailPrefix,
+                      onClose: _closeDetail,
                     ),
                 ],
               ),

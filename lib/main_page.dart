@@ -53,6 +53,12 @@ class MainPage extends StatefulWidget {
   /// opens that section's detail page. The map takes no node taps.
   final ValueChanged<SectionCell> onSectionTap;
 
+  /// LIST ROWS OPEN THE DETAIL PAGE (Brett, 2026-09-30): handed up
+  /// to the shell, which rides the node/route detail page over
+  /// everything (its back button returns to the list).
+  final ValueChanged<int> onNodeTap;
+  final ValueChanged<Route> onRouteTap;
+
   /// Test seam: widget tests can stand a plain body in for the map
   /// so no live map engine is needed. Null in the real app.
   final WidgetBuilder? mapBuilder;
@@ -72,6 +78,8 @@ class MainPage extends StatefulWidget {
     required this.onAsk,
     required this.onMapSizeChange,
     required this.onSectionTap,
+    required this.onNodeTap,
+    required this.onRouteTap,
     this.mapBuilder,
   });
 
@@ -288,6 +296,8 @@ class _MainPageState extends State<MainPage> {
         settings: widget.settings,
         frameName: widget.frameName,
         onAsk: widget.onAsk,
+        onNodeTap: widget.onNodeTap,
+        onRouteTap: widget.onRouteTap,
       );
 }
 

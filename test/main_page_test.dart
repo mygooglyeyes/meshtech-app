@@ -5,23 +5,31 @@
 // ("swipe", 2026-09-25): one tall scrollable stack; the map keeps
 // its ONE measured height, and closing a section slides home.
 
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide Route;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:meshtech_app/clinic_store.dart';
+import 'package:meshtech_app/codec.dart';
 import 'package:meshtech_app/main_page.dart';
 import 'package:meshtech_app/settings.dart';
 import 'package:meshtech_app/store.dart';
 
-Widget _page() => MaterialApp(
+Widget _page({
+  NodeStore? store,
+  ValueChanged<int>? onNodeTap,
+  ValueChanged<Route>? onRouteTap,
+}) =>
+    MaterialApp(
       home: MainPage(
-        store: NodeStore(),
+        store: store ?? NodeStore(),
         clinic: ClinicStore(),
         settings: const ConnectionSettings(),
         onDisconnect: () {},
         onAsk: () {},
         onMapSizeChange: (_) {},
         onSectionTap: (_) {},
+        onNodeTap: onNodeTap ?? (_) {},
+        onRouteTap: onRouteTap ?? (_) {},
         // The test seam: no live map engine in widget tests.
         mapBuilder: (_) => const SizedBox(key: Key('fake-map')),
       ),
@@ -30,8 +38,12 @@ Widget _page() => MaterialApp(
 /// Pump the page, then one more frame: the map's height is measured
 /// after the first frame (one-time), and the map only exists from
 /// the frame after that.
-Future<void> _pumpPage(WidgetTester tester) async {
-  await tester.pumpWidget(_page());
+Future<void> _pumpPage(WidgetTester tester,
+    {NodeStore? store,
+    ValueChanged<int>? onNodeTap,
+    ValueChanged<Route>? onRouteTap}) async {
+  await tester.pumpWidget(
+      _page(store: store, onNodeTap: onNodeTap, onRouteTap: onRouteTap));
   await tester.pump();
 }
 
@@ -39,6 +51,35 @@ double _mapH(WidgetTester tester) =>
     tester.getSize(find.byKey(const Key('fake-map'))).height;
 
 void main() {
+  testWidgets('list rows hand their taps up - the detail page is the '
+      "shell's job (Brett, 2026-09-30: tapping used to do nothing)",
+      (tester) async {
+    final store = NodeStore();
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    store.upsert(NodeRecord(
+        prefix: 0x21, name: 'Hilltop', lat: 38.0, lon: -122.0,
+        lastHeardMs: nowMs));
+    store.applyRoute(Route(
+        seq: 1, sectionId: 5, routeId: 77, packetCount: 4,
+        delayMedS: 12, lastHeardMin: 5, prefixes: [0x11, 0x12]));
+    final nodes = <int>[];
+    final routes = <int>[];
+    await _pumpPage(tester, store: store,
+        onNodeTap: nodes.add, onRouteTap: (r) => routes.add(r.routeId));
+
+    await tester.tap(find.byIcon(Icons.list));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Hilltop'));
+    await tester.pumpAndSettle();
+    expect(nodes, [0x21]);
+
+    await tester.tap(find.textContaining('Routes ('));
+    await tester.pumpAndSettle();
+    await tester.tap(find.textContaining('route 77'));
+    await tester.pumpAndSettle();
+    expect(routes, [77]);
+  });
+
   testWidgets('four section bars; feed health folds on a header tap',
       (tester) async {
     await _pumpPage(tester);

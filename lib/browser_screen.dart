@@ -19,12 +19,21 @@ class BrowserScreen extends StatefulWidget {
   final String? frameName;
   final VoidCallback onAsk; // the ↻ refresh (the vectored ask)
 
+  /// LIST ROWS OPEN THE DETAIL PAGE (Brett, 2026-09-30): tapping a
+  /// node or route used to do nothing - now it hands the tap up to
+  /// the shell, which rides the detail page over everything (its
+  /// back button returns to this list).
+  final ValueChanged<int> onNodeTap;
+  final ValueChanged<Route> onRouteTap;
+
   const BrowserScreen({
     super.key,
     required this.store,
     required this.settings,
     this.frameName,
     required this.onAsk,
+    required this.onNodeTap,
+    required this.onRouteTap,
   });
 
   @override
@@ -125,6 +134,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
             '${placed ? '' : ' - NO POSITION'} - heard $age ago',
             style: Theme.of(context).textTheme.bodySmall,
           ),
+          onTap: () => widget.onNodeTap(n.prefix),
         );
       },
     );
@@ -173,6 +183,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
             ' - section ${r.sectionId}',
             style: Theme.of(context).textTheme.bodySmall,
           ),
+          onTap: () => widget.onRouteTap(r),
         );
       },
     );

@@ -18,7 +18,12 @@ const _cell = SectionCell(
     id: 5, centerLat: 38.0, centerLon: -122.0,
     spanLatM: 15000, spanLonM: 20000);
 
-Widget _page({SectSum? summary, VoidCallback? onClose, NodeStore? store}) =>
+Widget _page(
+        {SectSum? summary,
+        VoidCallback? onClose,
+        NodeStore? store,
+        ValueChanged<int>? onNodeTap,
+        ValueChanged<Route>? onRouteTap}) =>
     MaterialApp(
       home: SectionScreen(
         store: store ?? NodeStore(),
@@ -26,6 +31,8 @@ Widget _page({SectSum? summary, VoidCallback? onClose, NodeStore? store}) =>
         cell: _cell,
         summary: summary,
         onClose: onClose ?? () {},
+        onNodeTap: onNodeTap ?? (_) {},
+        onRouteTap: onRouteTap ?? (_) {},
         // The test seam: no live map engine in widget tests.
         mapBuilder: (_) => const SizedBox(key: Key('fake-sect-map')),
       ),
@@ -76,7 +83,8 @@ void main() {
   });
 
   testWidgets("the list option (the main page's own) swaps in this "
-      "square's rows - and a row opens the health card", (tester) async {
+      "square's rows - and a row hands its node up to the detail "
+      'page', (tester) async {
     final store = NodeStore();
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     store.upsert(NodeRecord(
@@ -85,18 +93,19 @@ void main() {
     store.upsert(NodeRecord(
         prefix: 0x22, name: 'Faraway', lat: 30.0, lon: -100.0,
         lastHeardMs: nowMs));
-    await tester.pumpWidget(_page(store: store));
+    final tapped = <int>[];
+    await tester.pumpWidget(_page(store: store, onNodeTap: tapped.add));
     expect(find.byKey(const Key('fake-sect-map')), findsOneWidget);
     await tester.tap(find.byKey(const Key('section-list')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('fake-sect-map')), findsNothing);
     expect(find.text('Hilltop'), findsOneWidget); // this square's node
     expect(find.text('Faraway'), findsNothing); // not this square's
-    // a row tap opens the same health card the map does - proven by
-    // its honest gap rows (this store holds no clinic facts yet)
+    // a row tap hands the node to the shell's detail page (Brett,
+    // 2026-09-30) - the page itself is pinned in detail_screen_test
     await tester.tap(find.text('Hilltop'));
-    await tester.pumpAndSettle();
-    expect(find.textContaining('not measured yet'), findsWidgets);
+    await tester.pump();
+    expect(tapped, [0x21]);
   });
 
   testWidgets('the list scopes its routes to the square too, and the '

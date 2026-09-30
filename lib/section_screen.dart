@@ -22,7 +22,8 @@ import 'package:flutter/material.dart' hide Route;
 import 'package:maplibre/maplibre.dart';
 
 import 'clinic_store.dart';
-import 'codec.dart' show SectSum;
+import 'codec.dart' show Route, SectSum;
+import 'detail_screen.dart';
 import 'map_model.dart';
 import 'map_screen.dart' show mapStyleUrl;
 import 'store.dart';
@@ -55,6 +56,14 @@ class SectionScreen extends StatefulWidget {
   /// Null in the real app.
   final WidgetBuilder? mapBuilder;
 
+  /// LIST ROWS OPEN THE DETAIL PAGE (Brett, 2026-09-30): the
+  /// lists' node/route rows hand the tap up to the shell, which
+  /// rides the node/route detail page over everything (with its
+  /// back button to this list). The MAP's taps keep their own
+  /// health-card pop-ups (Brett: lists only).
+  final ValueChanged<int> onNodeTap;
+  final ValueChanged<Route> onRouteTap;
+
   const SectionScreen({
     super.key,
     required this.store,
@@ -63,6 +72,8 @@ class SectionScreen extends StatefulWidget {
     this.hotRouteIds = const [],
     this.summary,
     required this.onClose,
+    required this.onNodeTap,
+    required this.onRouteTap,
     this.mapBuilder,
   });
 
@@ -128,28 +139,11 @@ class _SectionScreenState extends State<SectionScreen> {
           children: [
             Text(title, style: Theme.of(ctx).textTheme.titleMedium),
             const SizedBox(height: 8),
-            for (final row in rows) _HealthRowView(row: row),
+            for (final row in rows) HealthRowView(row: row),
           ],
         ),
       ),
     );
-  }
-
-  /// A route tapped from the LIST: the same tap rules as the map -
-  /// the same route deselects, a new one takes over, and its health
-  /// card opens (Brett, 2026-09-30).
-  void _selectRoute(int routeId) {
-    setState(() {
-      _selRoute = _selRoute == routeId ? 0 : routeId;
-      _selPrefix = 0;
-    });
-    final r = widget.store.route(routeId);
-    if (r != null) {
-      _openHealthCard(
-          ClinicCards.routeTitle(r.prefixes),
-          ClinicCards.routeHealthCard(widget.clinic, r.prefixes,
-              nowMs: DateTime.now().millisecondsSinceEpoch));
-    }
   }
 
   /// The map/list switch (the main page's own option, 2026-09-30):
@@ -317,8 +311,8 @@ class _SectionScreenState extends State<SectionScreen> {
 
   /// THE LIST (Brett, 2026-09-30 - the main page's own option):
   /// THIS square's nodes and routes as tappable rows, because
-  /// overlapping map labels eat taps. A row follows the page's tap
-  /// rules and opens the same health card the map does.
+  /// overlapping map labels eat taps. A row opens the DETAIL page
+  /// (Brett, same day) - its back button returns to this list.
   Widget _listBody() {
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final cell = widget.cell;
@@ -371,7 +365,7 @@ class _SectionScreenState extends State<SectionScreen> {
                         ' - heard ${ageText(n.lastHeardMs)} ago',
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
-                      onTap: () => _selectNode(n.prefix),
+                      onTap: () => widget.onNodeTap(n.prefix),
                     );
                   },
                 ),
@@ -390,7 +384,7 @@ class _SectionScreenState extends State<SectionScreen> {
                         ' - section ${r.sectionId}',
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
-                      onTap: () => _selectRoute(r.routeId),
+                      onTap: () => widget.onRouteTap(r),
                     );
                   },
                 ),
@@ -519,198 +513,5 @@ class _SectionScreenState extends State<SectionScreen> {
         ),
       ],
     );
-  }
-}
-
-/// One health row drawn per Brett's approved design (2026-09-29):
-/// fixed-scale bars (the pale span runs worst..best, the white tick
-/// sits at the average - the wide span IS the coin flip), block bars,
-/// the 24-hour strip, compact flag lines, and the muted honest gaps.
-class _HealthRowView extends StatelessWidget {
-  final HealthRow row;
-  const _HealthRowView({required this.row});
-
-  static const _bar = Color(0xFF7FC4FF);
-  static const _mute = Color(0xFF9FC0E8);
-  static const _amber = Color(0xFFFFD9A8);
-
-  /// One label cell that NEVER wraps mid-word (Brett's bench
-  /// 2026-09-29: 'share'/'heard' pushed their last letter to the
-  /// next line in the fixed column). A tight fit shrinks the text
-  /// instead of breaking it.
-  static Widget _cell(String text,
-      {required double width,
-      TextAlign align = TextAlign.left,
-      double fontSize = 12,
-      Color? color}) {
-    return SizedBox(
-        width: width,
-        child: FittedBox(
-            fit: BoxFit.scaleDown,
-            alignment:
-                align == TextAlign.right ? Alignment.centerRight : Alignment.centerLeft,
-            child: Text(text,
-                textAlign: align,
-                maxLines: 1,
-                style: TextStyle(fontSize: fontSize, color: color))));
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    switch (row) {
-      case HealthFamily(:final name):
-        return Padding(
-          padding: const EdgeInsets.only(top: 14, bottom: 6),
-          child: Container(
-            padding: const EdgeInsets.only(bottom: 3),
-            decoration: const BoxDecoration(
-                border: Border(bottom: BorderSide(color: Colors.white24))),
-            child: SizedBox(
-                width: double.infinity,
-                child: FittedBox(
-                    fit: BoxFit.scaleDown,
-                    alignment: Alignment.centerLeft,
-                    child: Text(name.toUpperCase(),
-                        maxLines: 1,
-                        style: const TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.4,
-                            color: _amber)))),
-          ),
-        );
-      case HealthChip(:final label):
-        return Align(
-          alignment: Alignment.centerLeft,
-          child: Container(
-            margin: const EdgeInsets.only(top: 2, bottom: 6),
-            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-            decoration: BoxDecoration(
-              color: label.startsWith('Reported')
-                  ? const Color(0xFF22507F)
-                  : const Color(0xFF164A85),
-              border: Border.all(color: Colors.white54),
-              borderRadius: BorderRadius.circular(999),
-            ),
-            child: Text(label,
-                style: const TextStyle(fontSize: 11, color: Colors.white)),
-          ),
-        );
-      case HealthBar(
-          :final key,
-          :final value,
-          :final spread,
-          :final note,
-          :final start,
-          :final end,
-          :final tick
-        ):
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 7),
-          child: Row(children: [
-            _cell(key, width: 42, color: _mute),
-            _cell(value, width: 58, align: TextAlign.right),
-            Expanded(
-              child: LayoutBuilder(builder: (ctx, box) {
-                final w = box.maxWidth;
-                return SizedBox(
-                  height: 14,
-                  child: Stack(clipBehavior: Clip.none, children: [
-                    Positioned(
-                        left: 0,
-                        top: 3,
-                        width: w,
-                        height: 8,
-                        child: Container(
-                            decoration: BoxDecoration(
-                                color: Colors.white24,
-                                borderRadius: BorderRadius.circular(4)))),
-                    Positioned(
-                        left: w * start,
-                        top: 3,
-                        width: math.max(2.0, w * (end - start)),
-                        height: 8,
-                        child: Container(
-                            decoration: BoxDecoration(
-                                color: _bar,
-                                borderRadius: BorderRadius.circular(4)))),
-                    Positioned(
-                        left: w * tick - 1,
-                        top: 0,
-                        width: 2,
-                        height: 14,
-                        child: Container(color: Colors.white)),
-                  ]),
-                );
-              }),
-            ),
-            _cell(spread.isNotEmpty ? spread : note,
-                width: 52, fontSize: 11, color: _mute),
-          ]),
-        );
-      case HealthBlocks(:final key, :final value, :final filled, :final total):
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 7),
-          child: Row(children: [
-            _cell(key, width: 42, color: _mute),
-            _cell(value, width: 58, align: TextAlign.right),
-            Expanded(
-              child: RichText(
-                  text: TextSpan(
-                      style: const TextStyle(fontSize: 12),
-                      children: [
-                    TextSpan(
-                        text: '\u2588' * filled,
-                        style: const TextStyle(
-                            color: _bar, letterSpacing: 1)),
-                    TextSpan(
-                        text: '\u2591' * (total - filled),
-                        style: const TextStyle(
-                            color: Colors.white24, letterSpacing: 1)),
-                  ])),
-            ),
-          ]),
-        );
-      case HealthStrip(:final key, :final value, :final bits):
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 7),
-          child: Row(children: [
-            _cell(key, width: 42, color: _mute),
-            _cell(value, width: 58, align: TextAlign.right),
-            Expanded(
-              child: Row(children: [
-                for (var i = 0; i < 24; i++)
-                  Container(
-                    width: 5,
-                    height: 10,
-                    margin: const EdgeInsets.only(right: 1),
-                    color: ((bits >> i) & 1) == 1 ? _bar : Colors.white24,
-                  ),
-              ]),
-            ),
-          ]),
-        );
-      case HealthFlag(:final name, :final detail):
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 7),
-          child: Text.rich(TextSpan(children: [
-            TextSpan(
-                text: '\u26a0 $name',
-                style: const TextStyle(color: _amber)),
-            TextSpan(text: ' \u2014 $detail'),
-          ]), style: const TextStyle(fontSize: 12, color: Colors.white)),
-        );
-      case HealthNote(:final text):
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 7),
-          child:
-              Text(text, style: const TextStyle(fontSize: 12, color: Colors.white)),
-        );
-      case HealthGap(:final text):
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 6),
-          child: Text(text, style: const TextStyle(fontSize: 11, color: _mute)),
-        );
-    }
   }
 }
