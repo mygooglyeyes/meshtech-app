@@ -22,6 +22,7 @@ import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter/material.dart' hide Route;
 
 import 'ble_transport.dart';
+import 'clinic_screen.dart';
 import 'clinic_store.dart';
 import 'codec.dart';
 import 'companion_protocol.dart'
@@ -589,6 +590,7 @@ class _MeshtechAppState extends State<MeshtechApp> {
     // next tap after a reconnect, never as a stale overlay).
     _closeSection();
     _closeDetail();
+    _closeClinic();
   }
 
   /// THE SIZE BUTTONS: stepping 20/40/60 redraws the SAME held data
@@ -634,6 +636,8 @@ class _MeshtechAppState extends State<MeshtechApp> {
       // its summaries from there on).
       _sectionHot = const [];
       _sectionSum = null;
+      _sectionClinicView = null; // the plain section page (long press)
+      _sectionClinicWindow = 0;
     });
     _askSection(cell.id);
   }
@@ -648,6 +652,8 @@ class _MeshtechAppState extends State<MeshtechApp> {
       _openCell = null;
       _sectionHot = const [];
       _sectionSum = null;
+      _sectionClinicView = null;
+      _sectionClinicWindow = 0;
     });
   }
 
@@ -678,6 +684,52 @@ class _MeshtechAppState extends State<MeshtechApp> {
       _detailPrefix = 0;
       _detailRoute = null;
     });
+  }
+
+  /// THE CLINIC PAGE (Brett, 2026-09-30): "+clinic" on the map
+  /// opens it - the clinic chips, the time window and the section
+  /// list live there now, off the map. Its choices live HERE so
+  /// they survive the section-map round trip (the chips are still
+  /// lit when the back button returns to the page).
+  bool _clinicOpen = false;
+  ClinicView _clinicView = ClinicView.nodes;
+  int _clinicWindowMin = 1440;
+
+  /// The map's own view grid (lifted by MapScreen): the Clinic
+  /// page's section numbers are THESE squares - the number Brett
+  /// saw on the map is the number he taps in the list.
+  ViewGrid? _mapGrid;
+
+  /// The family the OPEN section page draws (null = the plain
+  /// section page from the map's long press).
+  ClinicView? _sectionClinicView;
+  int _sectionClinicWindow = 0;
+
+  void _openClinic() => setState(() => _clinicOpen = true);
+
+  void _closeClinic() {
+    if (!_clinicOpen) return;
+    setState(() => _clinicOpen = false);
+  }
+
+  /// THE CLINIC FLOW (Brett, 2026-09-30: "tapping on a clinic
+  /// option, then a section number opens that section map with the
+  /// clinic option details ... then a back button to go back to the
+  /// clinic page"): the chosen family draws on that section's map,
+  /// and the section's back button lands back on the Clinic page.
+  void _onClinicSection(int id) {
+    final g = _mapGrid;
+    if (g == null || id < 1 || id > g.cols * g.rows) return;
+    final cell = g.cell(id - 1);
+    setState(() {
+      _openSection = cell.id;
+      _openCell = cell;
+      _sectionHot = const [];
+      _sectionSum = null;
+      _sectionClinicView = _clinicView;
+      _sectionClinicWindow = _clinicWindowMin;
+    });
+    _askSection(cell.id);
   }
 
   /// The SECTION ASK - same pipe choice as the Update: air when the
@@ -781,13 +833,19 @@ class _MeshtechAppState extends State<MeshtechApp> {
               // the app underneath a page still open over the map.
               canPop: _openSection == 0 &&
                   _detailPrefix == 0 &&
-                  _detailRoute == null,
+                  _detailRoute == null &&
+                  !_clinicOpen,
               onPopInvokedWithResult: (didPop, _) {
                 if (didPop) return;
+                // THE TOP PAGE FIRST (Brett, 2026-09-25): detail,
+                // then the section map, then the Clinic page -
+                // never the app under a page still open.
                 if (_detailPrefix != 0 || _detailRoute != null) {
                   _closeDetail();
-                } else {
+                } else if (_openSection != 0) {
                   _closeSection();
+                } else {
+                  _closeClinic();
                 }
               },
               child: Stack(
@@ -808,8 +866,26 @@ class _MeshtechAppState extends State<MeshtechApp> {
                     onSectionTap: _onSectionTap,
                     onNodeTap: _openNodeDetail,
                     onRouteTap: _openRouteDetail,
+                    onClinicTap: _openClinic,
+                    onGrid: (g) => _mapGrid = g,
                     mapBuilder: widget.mapBuilder,
                   ),
+                  // THE CLINIC PAGE (Brett, 2026-09-30): the
+                  // +clinic button opens it - chips, time window,
+                  // sections. It rides between the map and whatever
+                  // page it opens.
+                  if (_clinicOpen)
+                    ClinicScreen(
+                      clinic: _clinic,
+                      store: _store,
+                      view: _clinicView,
+                      windowMin: _clinicWindowMin,
+                      onView: (v) => setState(() => _clinicView = v),
+                      onWindow: (m) =>
+                          setState(() => _clinicWindowMin = m),
+                      onPick: _onClinicSection,
+                      onClose: _closeClinic,
+                    ),
                   // THE SECTION DETAIL PAGE (Brett, 2026-09-25):
                   // rides OVER the main page - the map below stays
                   // mounted (its pan survives the round trip) and
@@ -824,6 +900,8 @@ class _MeshtechAppState extends State<MeshtechApp> {
                       cell: _openCell!,
                       hotRouteIds: _sectionHot,
                       summary: _sectionSum,
+                      clinicView: _sectionClinicView,
+                      clinicWindowMin: _sectionClinicWindow,
                       onClose: _closeSection,
                       onNodeTap: _openNodeDetail,
                       onRouteTap: _openRouteDetail,

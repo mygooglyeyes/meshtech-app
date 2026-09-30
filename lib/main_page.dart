@@ -59,6 +59,14 @@ class MainPage extends StatefulWidget {
   final ValueChanged<int> onNodeTap;
   final ValueChanged<Route> onRouteTap;
 
+  /// THE +CLINIC BUTTON (Brett, 2026-09-30): the map's clinic
+  /// chips left for the Clinic page - this opens it.
+  final VoidCallback? onClinicTap;
+
+  /// The map's live view grid, lifted to the shell so the Clinic
+  /// page lists the SAME squares the map numbers.
+  final ValueChanged<ViewGrid>? onGrid;
+
   /// Test seam: widget tests can stand a plain body in for the map
   /// so no live map engine is needed. Null in the real app.
   final WidgetBuilder? mapBuilder;
@@ -80,6 +88,8 @@ class MainPage extends StatefulWidget {
     required this.onSectionTap,
     required this.onNodeTap,
     required this.onRouteTap,
+    this.onClinicTap,
+    this.onGrid,
     this.mapBuilder,
   });
 
@@ -288,6 +298,8 @@ class _MainPageState extends State<MainPage> {
       onAsk: widget.onAsk,
       onMapSizeChange: widget.onMapSizeChange,
       onSectionTap: widget.onSectionTap,
+      onClinicTap: widget.onClinicTap,
+      onGrid: widget.onGrid,
     );
   }
 

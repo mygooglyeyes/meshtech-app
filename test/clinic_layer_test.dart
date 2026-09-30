@@ -689,4 +689,51 @@ void main() {
       expect(noWindow.markers, hasLength(1));
     });
   });
+
+  group('the Delivery family is AGGREGATE bars', () {
+    test('the per-route list is GONE - one low/avg/high bar per '
+        'metric (Brett, 2026-09-30)', () {
+      final clinic = _clinic(nowMs, [
+        const ClinicRouteFact(
+            source: 0xb17e,
+            path: [0x21, 0x22],
+            uses: 5,
+            direct: 0,
+            delayMinS: 1,
+            delayMedS: 2,
+            delayMaxS: 3,
+            lastAgeMin: 4,
+            ageDays: 1),
+        const ClinicRouteFact(
+            source: 0xb17e,
+            path: [0x21, 0x22, 0x23],
+            uses: 9,
+            direct: 0,
+            delayMinS: 4,
+            delayMedS: 6,
+            delayMaxS: 8,
+            lastAgeMin: 4,
+            ageDays: 1),
+      ]);
+      final rows = ClinicCards.nodeHealthCard(clinic, 0x21, nowMs: nowMs);
+      final bars = [for (final r in rows) if (r is HealthBar) r];
+      final keys = [for (final b in bars) b.key];
+      // ONE bar per metric (the per-route rows are gone) - and the
+      // delay bar reads low/avg/high over both trails: 1..8 s around
+      // 4 s.
+      expect(keys, containsAll(['hops', 'delay', 'uses']));
+      expect(keys.where((k) => k == 'delay'), hasLength(1));
+      final delay = bars.firstWhere((b) => b.key == 'delay');
+      expect(delay.value, '1/4/8 s');
+      expect(delay.note, 'low/avg/high');
+    });
+
+    test('with nothing measured the family speaks honest gaps', () {
+      final rows =
+          ClinicCards.nodeHealthCard(_clinic(nowMs, [_chart()]), 0x21,
+              nowMs: nowMs);
+      final gaps = [for (final r in rows) if (r is HealthGap) r.text];
+      expect(gaps, contains('hops \u00b7 delay \u00b7 uses: not measured yet'));
+    });
+  });
 }

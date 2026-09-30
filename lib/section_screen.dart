@@ -64,6 +64,16 @@ class SectionScreen extends StatefulWidget {
   final ValueChanged<int> onNodeTap;
   final ValueChanged<Route> onRouteTap;
 
+  /// THE CHOSEN CLINIC FAMILY (Brett, 2026-09-30: "tap a clinic
+  /// option, then a section number opens that section map with the
+  /// clinic option details - routes or nodes or trouble flags,
+  /// whatever was chosen"): when this page opens from the Clinic
+  /// page, the chosen family draws on this map, inside the chosen
+  /// time window. Null = the plain section page (the map's long
+  /// press or a list row's section).
+  final ClinicView? clinicView;
+  final int clinicWindowMin;
+
   const SectionScreen({
     super.key,
     required this.store,
@@ -74,6 +84,8 @@ class SectionScreen extends StatefulWidget {
     required this.onClose,
     required this.onNodeTap,
     required this.onRouteTap,
+    this.clinicView,
+    this.clinicWindowMin = 0,
     this.mapBuilder,
   });
 
@@ -257,7 +269,7 @@ class _SectionScreenState extends State<SectionScreen> {
         ? _listBody()
         : widget.mapBuilder != null
             ? widget.mapBuilder!(context)
-            : _buildMap(dots, faint, hot, sel);
+            : _buildMap(dots, faint, hot, sel, _clinicLayer(nowMs));
     return Scaffold(
       // The page's own bar: back to the map, which section this is,
       // the map/list switch (Brett, 2026-09-30), and the background
@@ -266,7 +278,12 @@ class _SectionScreenState extends State<SectionScreen> {
       appBar: AppBar(
         leading: IconButton(
           key: const ValueKey('section-back'),
-          tooltip: 'Back to the map',
+          // The honest destination (Brett, 2026-09-30): from the
+          // Clinic page's flow the button returns THERE, not to the
+          // map.
+          tooltip: widget.clinicView != null
+              ? 'Back to the clinic page'
+              : 'Back to the map',
           icon: const Icon(Icons.arrow_back),
           onPressed: widget.onClose,
         ),
@@ -417,11 +434,48 @@ class _SectionScreenState extends State<SectionScreen> {
         'p90 ${s.delayP90S}s';
   }
 
+  /// THE CHOSEN CLINIC FAMILY (Brett, 2026-09-30): the family the
+  /// Clinic page chose, built for THIS frame - rings and lines,
+  /// colored by honest state. Null on the plain section page.
+  ClinicLayer? _clinicLayer(int nowMs) => widget.clinicView == null
+      ? null
+      : ClinicLayerVM.build(widget.clinic, widget.store, widget.clinicView!,
+          nowMs: nowMs, windowMin: widget.clinicWindowMin);
+
+  static const _clinicColors = [
+    (ClinicColor.fresh, Color(0xFF4A90D9)),
+    (ClinicColor.aging, Color(0xFFF5C518)),
+    (ClinicColor.trouble, Color(0xFFE53935)),
+    (ClinicColor.secondHand, Color(0xFF26A69A)),
+  ];
+  static const _clinicLineColors = [
+    (ClinicColor.fresh, Color(0xFF4A90D9)),
+    (ClinicColor.aging, Color(0xFFF5C518)),
+    (ClinicColor.secondHand, Color(0xFF26A69A)),
+  ];
+  static List<Feature<Point>> _clinicDots(ClinicLayer layer, ClinicColor c) => [
+        for (final m in layer.markers)
+          if (m.color == c)
+            Feature(geometry: Point(Geographic(lon: m.lon, lat: m.lat))),
+      ];
+  static List<Feature<LineString>> _clinicLines(
+          ClinicLayer layer, ClinicColor c) =>
+      [
+        for (final l in layer.lines)
+          if (l.color == c)
+            for (final seg in l.segs)
+              Feature(
+                geometry: LineString(
+                    [for (final p in seg) ...[p.$1, p.$2]].positions(Coords.xy)),
+              ),
+      ];
+
   Widget _buildMap(
       List<DotVM> dots,
       List<List<MapPoint>> faint,
       List<List<MapPoint>> hot,
-      List<List<MapPoint>> sel) {
+      List<List<MapPoint>> sel,
+      ClinicLayer? clinic) {
     final c = widget.cell;
     return MapLibreMap(
       key: ValueKey('sectmap-${c.id}'),
@@ -481,6 +535,29 @@ class _SectionScreenState extends State<SectionScreen> {
             color: const Color(0xFFE07A2F),
             width: 6,
           ),
+        // THE CHOSEN CLINIC FAMILY (Brett, 2026-09-30): rings per
+        // fact and its lines, colored by honest state (fresh blue /
+        // aging yellow / trouble red / second-hand teal) - on top
+        // of the plain map. A second-hand fact NEVER wears a
+        // first-hand color (CLINIC-WIRE provenance rule).
+        if (clinic != null)
+          for (final (c2, col) in _clinicColors)
+            if (_clinicDots(clinic, c2).isNotEmpty)
+              CircleLayer(
+                points: _clinicDots(clinic, c2),
+                radius: c2 == ClinicColor.trouble ? 9 : 8,
+                color: col,
+                strokeColor: const Color(0xFFFFFFFF),
+                strokeWidth: 2,
+              ),
+        if (clinic != null)
+          for (final (c2, col) in _clinicLineColors)
+            if (_clinicLines(clinic, c2).isNotEmpty)
+              PolylineLayer(
+                polylines: _clinicLines(clinic, c2),
+                color: col,
+                width: 3,
+              ),
       ],
       children: [
         WidgetLayer(
@@ -511,6 +588,28 @@ class _SectionScreenState extends State<SectionScreen> {
               ),
           ],
         ),
+        if (clinic != null)
+          WidgetLayer(
+            // THE PEER CLAIMS (the Second-hand family's labels): a
+            // claim drawn where the peer SAID it is, wearing its
+            // 'reported' tag - the phone's own dot stays where it
+            // was, never merged.
+            key: ValueKey('claims-${widget.cell.id}'),
+            markers: [
+              for (final m in clinic.markers)
+                if (m.claim)
+                  Marker(
+                    point: Geographic(lon: m.lon, lat: m.lat),
+                    size: const Size(120, 24),
+                    alignment: Alignment.bottomCenter,
+                    child: Text(
+                      m.label,
+                      style: const TextStyle(
+                          fontSize: 11, color: Colors.black87),
+                    ),
+                  ),
+            ],
+          ),
       ],
     );
   }

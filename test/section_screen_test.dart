@@ -22,6 +22,8 @@ Widget _page(
         {SectSum? summary,
         VoidCallback? onClose,
         NodeStore? store,
+        ClinicView? clinicView,
+        int clinicWindowMin = 0,
         ValueChanged<int>? onNodeTap,
         ValueChanged<Route>? onRouteTap}) =>
     MaterialApp(
@@ -30,6 +32,8 @@ Widget _page(
         clinic: ClinicStore(),
         cell: _cell,
         summary: summary,
+        clinicView: clinicView,
+        clinicWindowMin: clinicWindowMin,
         onClose: onClose ?? () {},
         onNodeTap: onNodeTap ?? (_) {},
         onRouteTap: onRouteTap ?? (_) {},
@@ -39,6 +43,23 @@ Widget _page(
     );
 
 void main() {
+  testWidgets('from the Clinic flow the back button NAMES the clinic '
+      'page - never a lie about where it goes', (tester) async {
+    await tester.pumpWidget(_page());
+    expect(
+        tester
+            .widget<IconButton>(find.byKey(const ValueKey('section-back')))
+            .tooltip,
+        'Back to the map');
+    await tester.pumpWidget(
+        _page(clinicView: ClinicView.trouble, clinicWindowMin: 240));
+    expect(
+        tester
+            .widget<IconButton>(find.byKey(const ValueKey('section-back')))
+            .tooltip,
+        'Back to the clinic page');
+  });
+
   testWidgets('the page names its section and waits honestly for its '
       'own summary', (tester) async {
     await tester.pumpWidget(_page());

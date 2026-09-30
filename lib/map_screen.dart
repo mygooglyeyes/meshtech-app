@@ -20,6 +20,7 @@ import 'package:flutter/material.dart';
 import 'package:maplibre/maplibre.dart';
 
 import 'clinic_store.dart';
+import 'detail_screen.dart';
 import 'map_model.dart';
 import 'settings.dart';
 import 'store.dart';
@@ -47,6 +48,18 @@ class MapScreen extends StatefulWidget {
   /// no node taps and holds no selection.
   final ValueChanged<SectionCell>? onSectionTap;
 
+  /// THE +CLINIC BUTTON (Brett, 2026-09-30: "a main +clinic button
+  /// that when you tap it, it takes you to a new 'clinic' page"):
+  /// the clinic chips left the map - the chips, the time window and
+  /// the section list live on the Clinic page now.
+  final VoidCallback? onClinicTap;
+
+  /// The live view grid, lifted to the shell whenever the visible
+  /// squares re-cut - the Clinic page lists THESE same squares, so
+  /// the number on the map is the number in the list (Brett's "what
+  /// he sees is what he taps").
+  final ValueChanged<ViewGrid>? onGrid;
+
   const MapScreen({
     super.key,
     required this.store,
@@ -56,6 +69,8 @@ class MapScreen extends StatefulWidget {
     required this.onAsk,
     required this.onMapSizeChange,
     this.onSectionTap,
+    this.onClinicTap,
+    this.onGrid,
   });
 
   @override
@@ -67,24 +82,16 @@ class _MapScreenState extends State<MapScreen> {
   ViewGrid? _grid; // THE PHONE'S 3x4 VIEW GRID on the visible region
   int _overlayTick = 0; // bumped = labels/grid recompute their spots
 
-  /// THE CLINIC VIEW (Brett's pick; "All facts" chip REMOVED
-  /// 2026-09-30 - it drew every route at once and drowned the map):
-  /// which fact family the simple health layer draws - node health /
-  /// route health / trouble flags / second-hand peer reports.
-  /// Opens on NODE HEALTH. Switching views only changes the DRAWING
-  /// (rule 2) - never an ask, never a removal.
-  ClinicView _clinicView = ClinicView.nodes;
+  /// THE CLINIC (Brett, 2026-09-30): the chips, the time window and
+  /// the fact layer LEFT the map - "instead of the data changing on
+  /// the map when tapping on a clinic chip ... a main +clinic
+  /// button". This map draws dots, names, grid and the past route
+  /// lines only; the clinic pages ride over it from the button.
 
-  /// THE TIME WINDOW (Brett, 2026-09-30): only facts heard inside
-  /// the window draw. The better way to show the routes - "Route
-  /// health + 4 hrs" beats 4,000 lines at once. Opens on 1 day.
-  int _clinicWindowMin = 1440;
-  ClinicLayer? _clinicLayer; // last build's layer (tap targeting)
-
-  /// The tap's tolerance as a FINGER'S WIDTH on the tall map: a
-  /// fraction of the visible window (the size selector couples zoom
-  /// to window, so this lands near-constant on screen).
-  static const clinicTapFraction = 0.05;
+  /// A quick tap's tolerance in screen pixels: it must land on the
+  /// dot or the line to open its card (the same pick width the
+  /// section map uses).
+  static const _pickTolerance = 22.0;
 
   /// BRETT'S ROUTE-LINE TOGGLE (2026-09-25, reversed 2026-09-29):
   /// the PAST route lines (what the store holds) show/hide. PUSH TO
@@ -116,6 +123,9 @@ class _MapScreenState extends State<MapScreen> {
           _grid = next;
           _overlayTick++;
         });
+        // The Clinic page lists THESE squares (Brett: the number he
+        // sees on the map is the number he taps in the list).
+        widget.onGrid?.call(next);
       }
     } catch (_) {
       // The engine may not be ready in the first frames - the grid
@@ -138,40 +148,8 @@ class _MapScreenState extends State<MapScreen> {
   Widget build(BuildContext context) {
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final dots = MapViewModel.dots(widget.store, nowMs: nowMs);
-    // THE CLINIC LAYER (Mesh Clinic v2): one ring per drawn fact,
-    // colored by its honest state (fresh blue / aging yellow /
-    // trouble red / second-hand teal). A second-hand fact NEVER
-    // wears a first-hand color (CLINIC-WIRE provenance rule), and a
-    // fact with no place draws nowhere - counted out loud below.
-    final clinic =
-        ClinicLayerVM.build(widget.clinic, widget.store, _clinicView,
-            nowMs: nowMs, windowMin: _clinicWindowMin);
-    _clinicLayer = clinic; // tap targeting reads it between builds
-    List<Feature<Point>> clinicDots(ClinicColor c) => [
-          for (final m in clinic.markers)
-            if (m.color == c)
-              Feature(geometry: Point(Geographic(lon: m.lon, lat: m.lat))),
-        ];
-    List<Feature<LineString>> clinicLines(ClinicColor c) => [
-          for (final l in clinic.lines)
-            if (l.color == c)
-              for (final seg in l.segs)
-                Feature(
-                  geometry: LineString([for (final p in seg) ...[p.$1, p.$2]]
-                      .positions(Coords.xy)),
-                ),
-        ];
-    const clinicColors = [
-      (ClinicColor.fresh, Color(0xFF4A90D9)),
-      (ClinicColor.aging, Color(0xFFF5C518)),
-      (ClinicColor.trouble, Color(0xFFE53935)),
-      (ClinicColor.secondHand, Color(0xFF26A69A)),
-    ];
-    const clinicLineColors = [
-      (ClinicColor.fresh, Color(0xFF4A90D9)),
-      (ClinicColor.aging, Color(0xFFF5C518)),
-      (ClinicColor.secondHand, Color(0xFF26A69A)),
-    ];
+    // The clinic layer left the map (Brett, 2026-09-30): it lives
+    // on the Clinic page and the section maps that page opens.
     final s = widget.settings;
     // The grid's per-cell counts, computed ONCE per build.
     final cellCounts = _grid?.counts(widget.store);
@@ -234,27 +212,18 @@ class _MapScreenState extends State<MapScreen> {
                   onEvent: (e) {
                     _updateGrid();
                     if (e is MapEventStyleLoaded) _refreshOverlays();
-                    // A TAP ON A SQUARE = THAT SECTION'S PAGE (Brett,
-                    // 2026-09-25): the tapped square's NUMBER opens
-                    // the section with that number - what he sees is
-                    // what he taps, never re-derived from geography.
+                    // QUICK TAP = A NODE OR A ROUTE (Brett,
+                    // 2026-09-30: "quick tap is a route or node"):
+                    // its health report card opens - the same pop-up
+                    // the section map gives. LONG PRESS = THE
+                    // SECTION IT LANDS IN ("long press on a section
+                    // opens that section"): the square's NUMBER
+                    // opens the section with that number. A tap on
+                    // bare map does nothing - sections are a long
+                    // press now.
                     if (e is MapEventClick && _grid != null) {
-                      // THE CLINIC TAP (Mesh Clinic v2): a tap ON a
-                      // clinic fact opens its detail card - every
-                      // line labeled first-hand/second-hand. A tap
-                      // anywhere else opens the square's section:
-                      // the section law, unchanged.
-                      final layer = _clinicLayer;
-                      if (layer != null) {
-                        final hit = ClinicLayerVM.hitTest(
-                            layer,
-                            (e.point.lon, e.point.lat),
-                            _grid!.spanLatM * clinicTapFraction);
-                        if (hit != null) {
-                          _showClinicCard(hit);
-                          return;
-                        }
-                      }
+                      _quickTap(e);
+                    } else if (e is MapEventLongClick && _grid != null) {
                       final i = _grid!.cellIndex(e.point.lat, e.point.lon);
                       if (i >= 0) widget.onSectionTap?.call(_grid!.cell(i));
                     }
@@ -317,24 +286,6 @@ class _MapScreenState extends State<MapScreen> {
                         color: const Color(0x664A90D9),
                         width: 1,
                       ),
-                    // THE CLINIC LAYER draws ON TOP (the simple
-                    // health layer): rings per fact + its lines.
-                    for (final (c, col) in clinicColors)
-                      if (clinicDots(c).isNotEmpty)
-                        CircleLayer(
-                          points: clinicDots(c),
-                          radius: c == ClinicColor.trouble ? 9 : 8,
-                          color: col,
-                          strokeColor: const Color(0xFFFFFFFF),
-                          strokeWidth: 2,
-                        ),
-                    for (final (c, col) in clinicLineColors)
-                      if (clinicLines(c).isNotEmpty)
-                        PolylineLayer(
-                          polylines: clinicLines(c),
-                          color: col,
-                          width: 3,
-                        ),
                   ],
                   // Names on the map, every screen (section 8):
                   // "Hilltop ab" - name + pubkey head. The cell-count
@@ -408,28 +359,6 @@ class _MapScreenState extends State<MapScreen> {
                         ],
                       ),
                     WidgetLayer(
-                      // THE PEER CLAIMS (Mesh Clinic v2): the only
-                      // clinic labels - a claim drawn where the peer
-                      // SAID it is, wearing its '2nd' tag where
-                      // nothing else names the spot. Everywhere else
-                      // the base labels already name the node.
-                      key: ValueKey('claims-$_overlayTick'),
-                      markers: [
-                        for (final m in clinic.markers)
-                          if (m.claim)
-                            Marker(
-                              point: Geographic(lon: m.lon, lat: m.lat),
-                              size: const Size(120, 24),
-                              alignment: Alignment.bottomCenter,
-                              child: Text(
-                                m.label,
-                                style: const TextStyle(
-                                    fontSize: 11, color: Colors.black87),
-                              ),
-                            ),
-                      ],
-                    ),
-                    WidgetLayer(
                       // NO NODE TAPS ON THE MAIN MAP (Brett,
                       // 2026-09-25): the layer's default
                       // (TranslucentPointer) passes every touch
@@ -464,6 +393,14 @@ class _MapScreenState extends State<MapScreen> {
                   top: 8,
                   child: Column(
                     children: [
+                      // THE +CLINIC BUTTON (Brett, 2026-09-30): the
+                      // clinic chips left the map - this opens the
+                      // Clinic page (chips, time window, sections).
+                      _NavButton(
+                        icon: Icons.local_hospital,
+                        tooltip: '+clinic (the clinic page)',
+                        onTap: () => widget.onClinicTap?.call(),
+                      ),
                       _NavButton(
                         icon: Icons.home_outlined,
                         tooltip: 'Center on home',
@@ -532,62 +469,6 @@ class _MapScreenState extends State<MapScreen> {
               ],
             ),
           ),
-          // THE CLINIC VIEWS (Mesh Clinic v2, Brett's pick; "All
-          // facts" REMOVED 2026-09-30 - one chip drew every route at
-          // once and drowned the map): the fact-family views on the
-          // ONE map. Switching a view redraws ONLY (rule 2) - no
-          // ask, no spend. THE TIME WINDOW (Brett, same day): a
-          // dropdown beside the chips - only facts heard inside the
-          // window draw, so routes show as "the last 4 hrs".
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      children: [
-                        for (final (view, name) in const [
-                          (ClinicView.nodes, 'Node health'),
-                          (ClinicView.routes, 'Route health'),
-                          (ClinicView.trouble, 'Trouble flags'),
-                          (ClinicView.secondHand, 'Second-hand'),
-                        ])
-                          Padding(
-                            padding: const EdgeInsets.only(right: 4),
-                            child: ChoiceChip(
-                              label: Text(name,
-                                  style: const TextStyle(fontSize: 11)),
-                              selected: _clinicView == view,
-                              onSelected: (_) =>
-                                  setState(() => _clinicView = view),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-                DropdownButton<int>(
-                  key: const ValueKey('clinic-window'),
-                  value: _clinicWindowMin,
-                  isDense: true,
-                  style: const TextStyle(fontSize: 11, color: Colors.white),
-                  dropdownColor: const Color(0xFF123B63),
-                  items: const [
-                    DropdownMenuItem(value: 60, child: Text('1 hr')),
-                    DropdownMenuItem(value: 240, child: Text('4 hrs')),
-                    DropdownMenuItem(value: 720, child: Text('12 hrs')),
-                    DropdownMenuItem(value: 1440, child: Text('1 day')),
-                    DropdownMenuItem(value: 10080, child: Text('7 days')),
-                    DropdownMenuItem(value: 20160, child: Text('14 days')),
-                  ],
-                  onChanged: (v) => setState(
-                      () => _clinicWindowMin = v ?? _clinicWindowMin),
-                ),
-              ],
-            ),
-          ),
           // THE MAP'S OWN STATS LINE: dots held and stale count.
           // (Feed health and the log live in the main page's own
           // sections; the tap-ask counter left with the tap-ask.)
@@ -599,46 +480,82 @@ class _MapScreenState extends State<MapScreen> {
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ),
-          // THE CLINIC STRIP: what the layer drew and what has no
-          // place - the honest gap, said out loud (never invented).
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Text(
-              '${clinic.markers.length + clinic.lines.length} clinic fact(s) '
-              'drawn - ${clinic.secondHandDrawn} reported'
-              '${clinic.unpositioned > 0 ? ' - ${clinic.unpositioned} without a place' : ''}',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ),
-          if (clinic.unpositioned > 0)
-            TextButton(
-              onPressed: () => _openCardSheet(
-                  ClinicCards.looseCard(widget.clinic, nowMs: nowMs)),
-              child: Text(
-                'read the ${clinic.unpositioned} fact(s) without a place',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ),
         ],
       ),
     );
   }
 
-  /// A tap on a clinic fact opens its detail card: one line per
-  /// fact, EVERY line labeled first-hand/second-hand (the plan).
-  void _showClinicCard(ClinicTarget target) {
+  /// QUICK TAP TARGETING (Brett, 2026-09-30): a tap on a node dot
+  /// or a route line opens its health report card - the same pop-up
+  /// the section map gives (the full detail pages stay for the
+  /// lists, his "lists only" call). A node dot wins when it is
+  /// nearer than any line; a tap on bare map opens nothing.
+  void _quickTap(MapEventClick e) {
+    final map = _map;
+    if (map == null) return;
     final nowMs = DateTime.now().millisecondsSinceEpoch;
-    final lines = switch (target) {
-      ClinicNodeTarget(:final prefix) =>
-        ClinicCards.nodeCard(widget.clinic, widget.store, prefix,
-            nowMs: nowMs),
-      ClinicRouteTarget(:final path) =>
-        ClinicCards.routeCard(widget.clinic, path, nowMs: nowMs),
-    };
-    _openCardSheet(lines);
+    // Nodes first: the drawn dots, nearest within a finger's width.
+    final dots = MapViewModel.dots(widget.store, nowMs: nowMs);
+    final pts = map.toScreenLocations([
+      for (final d in dots) Geographic(lon: d.lon, lat: d.lat),
+    ]);
+    var best = -1;
+    var bestD = _pickTolerance;
+    for (var i = 0; i < pts.length; i++) {
+      final dx = pts[i].dx - e.screenPoint.dx;
+      final dy = pts[i].dy - e.screenPoint.dy;
+      final d = math.sqrt(dx * dx + dy * dy);
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    if (best >= 0) {
+      final prefix = dots[best].prefix;
+      _openHealthCard(
+          ClinicCards.nodeTitle(widget.store, prefix),
+          ClinicCards.nodeHealthCard(widget.clinic, prefix,
+              nowMs: nowMs));
+      return;
+    }
+    // Then the route lines - the section map's own pick math.
+    final layers = MapViewModel.routeLayers(widget.store,
+        highlightIds: const {}, showBackground: _pastRoutes);
+    if (layers.isEmpty) return;
+    final geos = <Geographic>[];
+    final shape = <(int, int)>[]; // (routeId, points in this segment)
+    for (final l in layers) {
+      for (final seg in l.segs) {
+        geos.addAll([for (final p in seg) Geographic(lon: p.$1, lat: p.$2)]);
+        shape.add((l.routeId, seg.length));
+      }
+    }
+    final screenPts = map.toScreenLocations(geos);
+    final screen = <int, List<List<MapPoint>>>{};
+    var i = 0;
+    for (final (routeId, len) in shape) {
+      final seg = [
+        for (var k = 0; k < len; k++)
+          (screenPts[i + k].dx, screenPts[i + k].dy)
+      ];
+      i += len;
+      (screen[routeId] ??= []).add(seg);
+    }
+    final hit = MapViewModel.routeIdNear(
+        screen, (e.screenPoint.dx, e.screenPoint.dy), _pickTolerance);
+    if (hit == null) return;
+    final r = widget.store.route(hit);
+    if (r == null) return;
+    _openHealthCard(
+        ClinicCards.routeTitle(r.prefixes),
+        ClinicCards.routeHealthCard(widget.clinic, r.prefixes,
+            nowMs: nowMs));
   }
 
-  void _openCardSheet(List<String> lines) {
+  /// The health report card (the same pop-up the section map
+  /// gives): the title, then the rows - chips, bars, strips and the
+  /// honest gaps (HealthRowView, shared with the detail pages).
+  void _openHealthCard(String title, List<HealthRow> rows) {
     showModalBottomSheet<void>(
       context: context,
       builder: (ctx) => SafeArea(
@@ -646,14 +563,9 @@ class _MapScreenState extends State<MapScreen> {
           shrinkWrap: true,
           padding: const EdgeInsets.all(16),
           children: [
-            Text(lines.first, style: Theme.of(ctx).textTheme.titleMedium),
+            Text(title, style: Theme.of(ctx).textTheme.titleMedium),
             const SizedBox(height: 8),
-            for (final line in lines.skip(1))
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(line,
-                    style: Theme.of(ctx).textTheme.bodySmall),
-              ),
+            for (final row in rows) HealthRowView(row: row),
           ],
         ),
       ),

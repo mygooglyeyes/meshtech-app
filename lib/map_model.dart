@@ -605,6 +605,11 @@ class HealthGap extends HealthRow {
 const double snrScaleLo = -10, snrScaleHi = 20;
 const double rssiScaleLo = -120, rssiScaleHi = -70;
 const double delayScaleLo = 0, delayScaleHi = 15;
+// The trail's own rulers (Brett's bars, 2026-09-30): the wire trail
+// is 1..8 hops; uses is a u16 count whose ruler's end means "this
+// much or more" (the _cap_u16 law).
+const double hopsScaleLo = 0, hopsScaleHi = 8;
+const double usesScaleLo = 0, usesScaleHi = 1000;
 double barFrac(double v, double lo, double hi) =>
     ((v - lo) / (hi - lo)).clamp(0.0, 1.0);
 
@@ -741,13 +746,23 @@ class ClinicCards {
       final h = row.fact.hopsTyp;
       out.add(HealthNote(h == 0 ? 'Typical hops: unknown' : 'Typical hops: $h'));
     }
+    // THE AGGREGATE BARS (Brett, 2026-09-30): the per-route list
+    // under this heading was frequently too long (a busy node sits
+    // on hundreds of trails). Every metric that list carried now
+    // reads as ONE fixed-scale bar per measuring box - the tick at
+    // the average, the span lowest..highest (the same grammar the
+    // delay bars speak). Provenance stays chipped per box.
+    final trails = <String, List<ClinicRouteFact>>{};
     for (final row in clinic.routeFacts) {
       if (!row.fact.path.contains(prefix)) continue;
-      wear(row.label);
-      final f = row.fact;
-      out.addAll(_delayBars(f));
-      out.add(HealthNote('${routeTitle(f.path)} \u00b7 ${f.uses} uses \u00b7 '
-          'last ${ageText(row.ageMin(f.lastAgeMin, nowMs))}'));
+      (trails[row.label] ??= []).add(row.fact);
+    }
+    for (final entry in trails.entries) {
+      wear(entry.key);
+      out.addAll(_statBars(entry.value));
+    }
+    if (trails.isEmpty) {
+      _gapRows(out, ['hops', 'delay', 'uses']);
     }
     for (final row in exchange) {
       wear(row.label);
@@ -940,6 +955,70 @@ class ClinicCards {
   }
 
   /// One route's delay bar (0 = unknown on the wire - it says so).
+  /// One box's trail-metrics as three aggregate bars (Brett,
+  /// 2026-09-30: "Hops: average, highest, lowest; delay: ...; Uses:
+  /// ..." - every metric the old list carried, in one row each).
+  /// A delay the wire never carried stays out of the average - the
+  /// honest gap line below names what was not measured.
+  static List<HealthRow> _statBars(List<ClinicRouteFact> facts) {
+    final out = <HealthRow>[
+      _statBar('hops', [for (final f in facts) f.path.length.toDouble()],
+          hopsScaleLo, hopsScaleHi),
+    ];
+    final known = [for (final f in facts) if (_delayKnown(f)) f];
+    if (known.isEmpty) {
+      out.add(const HealthNote('delay unknown'));
+    } else {
+      var lo = 0x7FFFFFFF, hi = 0, sum = 0;
+      for (final f in known) {
+        final loV = f.delayMinS > 0
+            ? f.delayMinS
+            : (f.delayMedS > 0 ? f.delayMedS : f.delayMaxS);
+        final hiV = f.delayMaxS > 0
+            ? f.delayMaxS
+            : (f.delayMedS > 0 ? f.delayMedS : f.delayMinS);
+        final midV = f.delayMedS > 0 ? f.delayMedS : ((loV + hiV) ~/ 2);
+        lo = math.min(lo, loV);
+        hi = math.max(hi, hiV);
+        sum += midV;
+      }
+      final avg = sum ~/ known.length;
+      out.add(HealthBar(
+          key: 'delay',
+          value: '$lo/$avg/$hi s',
+          note: 'low/avg/high',
+          start: barFrac(lo.toDouble(), delayScaleLo, delayScaleHi),
+          end: barFrac(hi.toDouble(), delayScaleLo, delayScaleHi),
+          tick: barFrac(avg.toDouble(), delayScaleLo, delayScaleHi)));
+    }
+    out.add(_statBar('uses', [for (final f in facts) f.uses.toDouble()],
+        usesScaleLo, usesScaleHi));
+    return out;
+  }
+
+  static bool _delayKnown(ClinicRouteFact f) =>
+      f.delayMinS > 0 || f.delayMedS > 0 || f.delayMaxS > 0;
+
+  /// ONE AGGREGATE BAR: value reads low/avg/high (the delay bars'
+  /// own min/med/max grammar), the pale span runs low..high, the
+  /// white tick sits at the average.
+  static HealthBar _statBar(
+      String key, List<double> values, double scaleLo, double scaleHi) {
+    final sorted = [...values]..sort();
+    final lo = sorted.first;
+    final hi = sorted.last;
+    final avg = sorted.reduce((a, b) => a + b) / sorted.length;
+    String v(double x) =>
+        x == x.roundToDouble() ? '${x.round()}' : x.toStringAsFixed(1);
+    return HealthBar(
+        key: key,
+        value: '${v(lo)}/${v(avg)}/${v(hi)}',
+        note: 'low/avg/high',
+        start: barFrac(lo, scaleLo, scaleHi),
+        end: barFrac(hi, scaleLo, scaleHi),
+        tick: barFrac(avg, scaleLo, scaleHi));
+  }
+
   static List<HealthRow> _delayBars(ClinicRouteFact f) {
     if (f.delayMinS == 0 && f.delayMedS == 0 && f.delayMaxS == 0) {
       return const [HealthNote('delay unknown')];
