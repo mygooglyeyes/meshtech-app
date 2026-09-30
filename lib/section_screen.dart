@@ -73,9 +73,10 @@ class SectionScreen extends StatefulWidget {
 class _SectionScreenState extends State<SectionScreen> {
   MapController? _map;
 
-  /// The page's OWN background toggle (Brett, 2026-09-25): independent
-  /// of the main map's - a fresh page starts ON, not saved.
-  bool _pastRoutes = true;
+  /// The page's OWN background toggle (Brett, 2026-09-25, reversed
+  /// 2026-09-29): independent of the main map's - PUSH TO SEE, hidden
+  /// by default, not saved.
+  bool _pastRoutes = false;
 
   /// THE SELECTION (Brett's tap rules): at most ONE element holds it
   /// - a node prefix OR a route id, 0 = none. Nothing else on the

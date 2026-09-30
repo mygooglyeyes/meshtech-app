@@ -63,13 +63,14 @@ void main() {
 
     IconButton toggle() =>
         tester.widget<IconButton>(find.byKey(const Key('section-routes')));
-    // Starts ON (bright icon): the background lines are shown.
-    expect((toggle().icon as Icon).color, Colors.white);
+    // Starts OFF (dim icon): the faint lines are hidden - push to
+    // SEE (Brett, 2026-09-29).
+    expect((toggle().icon as Icon).color, Colors.white38);
     await tester.tap(find.byKey(const Key('section-routes')));
     await tester.pump();
-    expect((toggle().icon as Icon).color, Colors.white38); // hidden
+    expect((toggle().icon as Icon).color, Colors.white); // shown
     await tester.tap(find.byKey(const Key('section-routes')));
     await tester.pump();
-    expect((toggle().icon as Icon).color, Colors.white); // shown again
+    expect((toggle().icon as Icon).color, Colors.white38); // hidden again
   });
 }

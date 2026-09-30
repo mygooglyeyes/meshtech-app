@@ -79,10 +79,11 @@ class _MapScreenState extends State<MapScreen> {
   /// to window, so this lands near-constant on screen).
   static const clinicTapFraction = 0.05;
 
-  /// BRETT'S ROUTE-LINE TOGGLE (2026-09-25): the PAST route lines
-  /// (what the store holds) show/hide. Not saved - a fresh launch
-  /// starts ON.
-  bool _pastRoutes = true;
+  /// BRETT'S ROUTE-LINE TOGGLE (2026-09-25, reversed 2026-09-29):
+  /// the PAST route lines (what the store holds) show/hide. PUSH TO
+  /// SEE - hidden by default, the button reveals them. Not saved -
+  /// a fresh launch starts OFF.
+  bool _pastRoutes = false;
 
   /// Re-cut the view grid onto what the screen ACTUALLY shows right
   /// now (Brett's 3x4, 2026-09-24) - so the lines and cell counts
