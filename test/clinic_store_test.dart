@@ -92,10 +92,10 @@ void main() {
           heardMs: now);
       final own = s.nodeFactsFor(0x21).single;
       expect(own.firstHand, isTrue);
-      expect(own.label, 'first-hand (box b17e)');
+      expect(own.label, 'Direct (b17e)');
       final peer = s.nodeFactsFor(0x33).single;
       expect(peer.firstHand, isFalse);
-      expect(peer.label, 'second-hand (box beef said it)');
+      expect(peer.label, 'Reported (beef)');
     });
 
     test('two boxes measuring one node = TWO rows, never merged', () {
@@ -286,7 +286,7 @@ void main() {
       // it - so the row is second-hand, never re-worded.
       expect(chart.firstHand, isFalse);
       expect(chart.viaOrigin, 0xbeef);
-      expect(chart.label, 'second-hand (box b17e said it)');
+      expect(chart.label, 'Reported (b17e)');
       expect(chart.ageMin(chart.fact.lastAgeMin, now), 15);
       expect(back.routeFacts.length, 1);
       expect(back.flagFacts.length, 1);
@@ -366,8 +366,8 @@ void main() {
     });
 
     test('the provenance label names the box honestly', () {
-      expect(provenanceLabel(0xb17e, 0xb17e), 'first-hand (box b17e)');
-      expect(provenanceLabel(0x0001, 0xb17e), 'second-hand (box 0001 said it)');
+      expect(provenanceLabel(0xb17e, 0xb17e), 'Direct (b17e)');
+      expect(provenanceLabel(0x0001, 0xb17e), 'Reported (0001)');
     });
   });
 }

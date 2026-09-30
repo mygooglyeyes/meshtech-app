@@ -205,7 +205,7 @@ void main() {
           clinic, _store(nowMs: nowMs), ClinicView.nodes,
           nowMs: nowMs);
       final labels = {for (final m in layer.markers) m.label};
-      expect(labels, {'Hilltop 21', 'Hilltop 21 \u00b7 2nd'});
+      expect(labels, {'Hilltop 21', 'Hilltop 21 \u00b7 reported'});
     });
 
     test('EVERY card line about a fact carries its provenance label', () {
@@ -236,14 +236,13 @@ void main() {
       expect(factLines.length, 4);
       for (final line in factLines) {
         expect(
-            line.startsWith('first-hand (box ') ||
-                line.startsWith('second-hand (box '),
+            line.startsWith('Direct (') || line.startsWith('Reported ('),
             isTrue,
             reason: 'unlabeled fact: $line');
       }
-      expect(factLines.where((l) => l.contains('box b17e')).length, 1);
-      expect(factLines.where((l) => l.contains('box beef said it')).length, 2);
-      expect(factLines.where((l) => l.contains('box cafe said it')).length, 1);
+      expect(factLines.where((l) => l.contains('(b17e)')).length, 1);
+      expect(factLines.where((l) => l.contains('(beef)')).length, 2);
+      expect(factLines.where((l) => l.contains('(cafe)')).length, 1);
     });
   });
 
@@ -302,7 +301,7 @@ void main() {
           nowMs: nowMs);
       expect(card.first, 'route 21-22');
       expect(card[1],
-          'first-hand (box b17e) - route: 56 uses, via trail, '
+          'Direct (b17e) - route: 56 uses, via trail, '
           'delay min/med/max 2 s/4 s/9 s, last used 17 min ago, 2 days old');
       // Missing delays stay missing - never a plausible constant.
       expect(card[2], contains('delay min/med/max unknown/unknown/unknown'));
@@ -329,12 +328,12 @@ void main() {
       expect(card.first, 'facts without a place');
       expect(
           card[1],
-          'first-hand (box b17e) - corrupt packets are 12.5% of heard '
+          'Direct (b17e) - corrupt packets are 12.5% of heard '
           'traffic (band noise or a broken transmitter \u2014 never '
           'blamed on a sender) - 4 event(s), first 30 min ago, '
           'last 5 min ago');
       expect(card[2],
-          'second-hand (box beef said it) - pulse (said 4 min ago): '
+          'Reported (beef) - pulse (said 4 min ago): '
           'uptime 21 h, 4/h, 40 active, airtime 9 s/h');
     });
 
@@ -364,6 +363,173 @@ void main() {
       expect(ClinicCards.ageText(3 * 1440), '3 d ago');
       expect(ClinicCards.ageText(ageUnknownMin),
           'unknown (older than the wire can say)');
+    });
+  });
+
+  group('the health report cards (Brett, 2026-09-29)', () {
+    test('a node report names the four families with the real numbers '
+        'and the honest gaps', () {
+      final clinic = _clinic(nowMs, [
+        const ClinicNodeFact(
+            source: 0xb17e,
+            prefix: 0x21,
+            lastAgeMin: 3,
+            ageDays: 5,
+            strip: 0x800007,
+            hopsTyp: 2,
+            sharePct: 37,
+            snrEwma: 20,
+            snrBest: 28,
+            snrWorst: 8,
+            snrSd: 8,
+            rssiEwma: -96,
+            rssiBest: -90,
+            rssiWorst: -101,
+            rssiSd: 3),
+        const ClinicFlagFact(
+            source: 0xb17e,
+            flag: flagRateStorm,
+            subject: 0x21,
+            events: 3,
+            firstAgeMin: 9,
+            lastAgeMin: 2,
+            detail: 22),
+        const ClinicFlagFact(
+            source: 0xb17e,
+            flag: flagTsBackwards,
+            subject: 0x21,
+            events: 2,
+            firstAgeMin: 30,
+            lastAgeMin: 5,
+            detail: 500),
+        const ClinicRouteFact(
+            source: 0xb17e,
+            path: [0x21, 0x22],
+            uses: 56,
+            direct: 0,
+            delayMinS: 2,
+            delayMedS: 4,
+            delayMaxS: 9,
+            lastAgeMin: 17,
+            ageDays: 2),
+      ]);
+      final card = ClinicCards.nodeHealthCard(clinic, 0x21, nowMs: nowMs);
+      // The four families, Brett's words, Brett's order.
+      expect([
+        for (final r in card)
+          if (r is HealthFamily) r.name
+      ], [
+        'Link quality margins',
+        'Airtime & congestion',
+        'Delivery reliability & latency',
+        'Stability & hygiene',
+      ]);
+      // The provenance chip: Direct / Reported - no "box", no
+      // "said it" (Brett, 2026-09-29).
+      final chips = [for (final r in card) if (r is HealthChip) r.label];
+      expect(chips, contains('Direct (b17e)'));
+      // The margins: average AND spread on fixed-scale bars - the
+      // numbers only, no grade.
+      final snr = card.whereType<HealthBar>().firstWhere((b) => b.key == 'SNR');
+      expect(snr.value, '5.0 dB');
+      expect(snr.spread, '\u00b12.0');
+      expect(snr.start, lessThan(snr.tick));
+      expect(snr.tick, lessThan(snr.end));
+      final rssi =
+          card.whereType<HealthBar>().firstWhere((b) => b.key == 'RSSI');
+      expect(rssi.value, '-96 dBm');
+      expect(rssi.spread, '\u00b13');
+      // Airtime: the share blocks + the rate-storm evidence.
+      expect(card.whereType<HealthBlocks>().single.value, '37%');
+      final storm = card
+          .whereType<HealthFlag>()
+          .firstWhere((f) => f.name == 'rate storm');
+      expect(storm.detail, contains('peak 22/min'));
+      // Delivery: hops in Brett's words + the route delay bar.
+      expect(card.whereType<HealthNote>().map((n) => n.text),
+          contains('Typical hops: 2'));
+      final delay =
+          card.whereType<HealthBar>().firstWhere((b) => b.key == 'delay');
+      expect(delay.value, '2/4/9 s');
+      // Stability: the strip + the clock-skew evidence.
+      expect(card.whereType<HealthStrip>().single.value, '4/24 h');
+      final ts = card
+          .whereType<HealthFlag>()
+          .firstWhere((f) => f.name == 'timestamps backwards');
+      expect(ts.detail, contains('worst jump 500 s'));
+      // The honest gaps, named out loud - never invented.
+      final gaps = [for (final g in card.whereType<HealthGap>()) g.text];
+      expect(
+          gaps,
+          contains('duplicates \u00b7 occupancy \u00b7 duty headroom: '
+              'not measured yet'));
+      expect(
+          gaps,
+          contains('loss \u00b7 retries \u00b7 reordering \u00b7 '
+              'request\u2192answer: not measured yet'));
+      expect(gaps, contains('churn \u00b7 hash collisions: not measured yet'));
+    });
+
+    test('a route report carries its chart and its honest gaps', () {
+      final clinic = _clinic(nowMs, [
+        const ClinicRouteFact(
+            source: 0xb17e,
+            path: [0x21, 0x22],
+            uses: 56,
+            direct: 0,
+            delayMinS: 2,
+            delayMedS: 4,
+            delayMaxS: 9,
+            lastAgeMin: 17,
+            ageDays: 2),
+      ]);
+      final card =
+          ClinicCards.routeHealthCard(clinic, const [0x21, 0x22], nowMs: nowMs);
+      expect([
+        for (final r in card)
+          if (r is HealthFamily) r.name
+      ], [
+        'Link quality margins',
+        'Airtime & congestion',
+        'Delivery reliability & latency',
+        'Stability & hygiene',
+      ]);
+      expect(card.whereType<HealthChip>().map((c) => c.label),
+          contains('Direct (b17e)'));
+      expect(card.whereType<HealthNote>().map((n) => n.text),
+          contains('56 use(s) counted'));
+      final delay = card.whereType<HealthBar>().single;
+      expect(delay.value, '2/4/9 s');
+      expect(delay.note, 'min/med/max');
+      final gaps = [for (final g in card.whereType<HealthGap>()) g.text];
+      expect(gaps, contains('per-hop signal: not measured yet'));
+      expect(gaps, contains('duplicates: not measured yet'));
+      expect(
+          gaps,
+          contains('loss \u00b7 retries \u00b7 reordering \u00b7 '
+              'request\u2192answer: not measured yet'));
+      expect(gaps, contains('churn \u00b7 hash collisions: not measured yet'));
+    });
+
+    test('a trail no box charted says so - and the sentinels stay '
+        'unknown', () {
+      final empty =
+          ClinicCards.routeHealthCard(ClinicStore(), const [0x21, 0x22],
+              nowMs: nowMs);
+      expect(empty.whereType<HealthNote>().first.text, 'no chart yet');
+      final clinic = _clinic(nowMs, [
+        _chart(
+            source: 0xb17e,
+            lastAgeMin: ageUnknownMin,
+            hops: 0,
+            share: shareUnknownPct),
+      ]);
+      final card = ClinicCards.nodeHealthCard(clinic, 0x21, nowMs: nowMs);
+      final notes = [for (final n in card.whereType<HealthNote>()) n.text];
+      expect(notes, contains('SNR unknown'));
+      expect(notes, contains('RSSI unknown'));
+      expect(notes, contains('Typical hops: unknown'));
+      expect(notes, contains('share unknown'));
     });
   });
 }

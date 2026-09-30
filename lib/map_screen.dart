@@ -568,7 +568,7 @@ class _MapScreenState extends State<MapScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 8),
             child: Text(
               '${clinic.markers.length + clinic.lines.length} clinic fact(s) '
-              'drawn - ${clinic.secondHandDrawn} second-hand'
+              'drawn - ${clinic.secondHandDrawn} reported'
               '${clinic.unpositioned > 0 ? ' - ${clinic.unpositioned} without a place' : ''}',
               style: Theme.of(context).textTheme.bodySmall,
             ),

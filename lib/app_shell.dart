@@ -780,6 +780,7 @@ class _MeshtechAppState extends State<MeshtechApp> {
                   if (_openSection != 0 && _openCell != null)
                     SectionScreen(
                       store: _store,
+                      clinic: _clinic,
                       cell: _openCell!,
                       hotRouteIds: _sectionHot,
                       summary: _sectionSum,

@@ -10,15 +10,18 @@
 // a tap selects, the SAME tap deselects, tapping another element
 // (node, route, button) moves the selection - nothing ever stays
 // selected against his will. A tap on empty map clears everything.
-// Route lines are SELECTABLE ONLY for now: the detail info they
-// will carry is defined later (Brett) - the selection is the honest
-// placeholder, never invented content.
+// THE DETAIL (Brett, 2026-09-29): a tap on a node or a route ALSO
+// opens its health report card - the four health families as bars
+// and strips (his approved graphical design), every fact chipped
+// Direct/Reported, and an honest "not measured yet" wherever the
+// mesh carries no such fact.
 
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart' hide Route;
 import 'package:maplibre/maplibre.dart';
 
+import 'clinic_store.dart';
 import 'codec.dart' show SectSum;
 import 'map_model.dart';
 import 'map_screen.dart' show mapStyleUrl;
@@ -34,6 +37,9 @@ class SectionScreen extends StatefulWidget {
   /// right), and its geography is where this page's camera parks -
   /// the square he tapped, up close.
   final SectionCell cell;
+
+  /// The clinic facts - where a tap's health card reads from.
+  final ClinicStore clinic;
 
   /// The warm layer: route ids the summaries of THIS section named.
   final List<int> hotRouteIds;
@@ -52,6 +58,7 @@ class SectionScreen extends StatefulWidget {
   const SectionScreen({
     super.key,
     required this.store,
+    required this.clinic,
     required this.cell,
     this.hotRouteIds = const [],
     this.summary,
@@ -88,12 +95,37 @@ class _SectionScreenState extends State<SectionScreen> {
 
   /// A node's tag tapped: it selects - the same tag again deselects,
   /// a different tag takes it over, and the route selection clears
-  /// (ONE element holds the selection, per Brett's rule).
+  /// (ONE element holds the selection, per Brett's rule). The tap
+  /// ALSO opens the node's health report card (Brett, 2026-09-29).
   void _selectNode(int prefix) {
     setState(() {
       _selPrefix = _selPrefix == prefix ? 0 : prefix;
       _selRoute = 0;
     });
+    _openHealthCard(
+        ClinicCards.nodeTitle(widget.store, prefix),
+        ClinicCards.nodeHealthCard(widget.clinic, prefix,
+            nowMs: DateTime.now().millisecondsSinceEpoch));
+  }
+
+  /// The detail card (Brett's approved graphical design): the title,
+  /// then the rows - chips, fixed-scale bars, strips, flags, and the
+  /// muted honest gaps.
+  void _openHealthCard(String title, List<HealthRow> rows) {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.all(16),
+          children: [
+            Text(title, style: Theme.of(ctx).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            for (final row in rows) _HealthRowView(row: row),
+          ],
+        ),
+      ),
+    );
   }
 
   /// The toggle button: flips the background lines AND moves the
@@ -156,6 +188,17 @@ class _SectionScreenState extends State<SectionScreen> {
         _selPrefix = 0;
       }
     });
+    // A tap ON a route ALSO opens its health report card (Brett,
+    // 2026-09-29) - the tap rules above never changed.
+    if (hit != null) {
+      final r = widget.store.route(hit);
+      if (r != null) {
+        _openHealthCard(
+            ClinicCards.routeTitle(r.prefixes),
+            ClinicCards.routeHealthCard(widget.clinic, r.prefixes,
+                nowMs: DateTime.now().millisecondsSinceEpoch));
+      }
+    }
   }
 
   @override
@@ -342,5 +385,194 @@ class _SectionScreenState extends State<SectionScreen> {
         ),
       ],
     );
+  }
+}
+
+/// One health row drawn per Brett's approved design (2026-09-29):
+/// fixed-scale bars (the pale span runs worst..best, the white tick
+/// sits at the average - the wide span IS the coin flip), block bars,
+/// the 24-hour strip, compact flag lines, and the muted honest gaps.
+class _HealthRowView extends StatelessWidget {
+  final HealthRow row;
+  const _HealthRowView({required this.row});
+
+  static const _bar = Color(0xFF7FC4FF);
+  static const _mute = Color(0xFF9FC0E8);
+  static const _amber = Color(0xFFFFD9A8);
+
+  @override
+  Widget build(BuildContext context) {
+    switch (row) {
+      case HealthFamily(:final name):
+        return Padding(
+          padding: const EdgeInsets.only(top: 14, bottom: 6),
+          child: Container(
+            padding: const EdgeInsets.only(bottom: 3),
+            decoration: const BoxDecoration(
+                border: Border(bottom: BorderSide(color: Colors.white24))),
+            child: Text(name.toUpperCase(),
+                style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.4,
+                    color: _amber)),
+          ),
+        );
+      case HealthChip(:final label):
+        return Align(
+          alignment: Alignment.centerLeft,
+          child: Container(
+            margin: const EdgeInsets.only(top: 2, bottom: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+            decoration: BoxDecoration(
+              color: label.startsWith('Reported')
+                  ? const Color(0xFF22507F)
+                  : const Color(0xFF164A85),
+              border: Border.all(color: Colors.white54),
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text(label,
+                style: const TextStyle(fontSize: 11, color: Colors.white)),
+          ),
+        );
+      case HealthBar(
+          :final key,
+          :final value,
+          :final spread,
+          :final note,
+          :final start,
+          :final end,
+          :final tick
+        ):
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 7),
+          child: Row(children: [
+            SizedBox(
+                width: 38,
+                child: Text(key,
+                    style: const TextStyle(fontSize: 12, color: _mute))),
+            SizedBox(
+                width: 58,
+                child: Text(value,
+                    textAlign: TextAlign.right,
+                    style: const TextStyle(fontSize: 12))),
+            Expanded(
+              child: LayoutBuilder(builder: (ctx, box) {
+                final w = box.maxWidth;
+                return SizedBox(
+                  height: 14,
+                  child: Stack(clipBehavior: Clip.none, children: [
+                    Positioned(
+                        left: 0,
+                        top: 3,
+                        width: w,
+                        height: 8,
+                        child: Container(
+                            decoration: BoxDecoration(
+                                color: Colors.white24,
+                                borderRadius: BorderRadius.circular(4)))),
+                    Positioned(
+                        left: w * start,
+                        top: 3,
+                        width: math.max(2.0, w * (end - start)),
+                        height: 8,
+                        child: Container(
+                            decoration: BoxDecoration(
+                                color: _bar,
+                                borderRadius: BorderRadius.circular(4)))),
+                    Positioned(
+                        left: w * tick - 1,
+                        top: 0,
+                        width: 2,
+                        height: 14,
+                        child: Container(color: Colors.white)),
+                  ]),
+                );
+              }),
+            ),
+            SizedBox(
+                width: 52,
+                child: Text(spread.isNotEmpty ? spread : note,
+                    style: const TextStyle(fontSize: 11, color: _mute))),
+          ]),
+        );
+      case HealthBlocks(:final key, :final value, :final filled, :final total):
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 7),
+          child: Row(children: [
+            SizedBox(
+                width: 38,
+                child: Text(key,
+                    style: const TextStyle(fontSize: 12, color: _mute))),
+            SizedBox(
+                width: 58,
+                child: Text(value,
+                    textAlign: TextAlign.right,
+                    style: const TextStyle(fontSize: 12))),
+            Expanded(
+              child: RichText(
+                  text: TextSpan(
+                      style: const TextStyle(fontSize: 12),
+                      children: [
+                    TextSpan(
+                        text: '\u2588' * filled,
+                        style: const TextStyle(
+                            color: _bar, letterSpacing: 1)),
+                    TextSpan(
+                        text: '\u2591' * (total - filled),
+                        style: const TextStyle(
+                            color: Colors.white24, letterSpacing: 1)),
+                  ])),
+            ),
+          ]),
+        );
+      case HealthStrip(:final key, :final value, :final bits):
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 7),
+          child: Row(children: [
+            SizedBox(
+                width: 38,
+                child: Text(key,
+                    style: const TextStyle(fontSize: 12, color: _mute))),
+            SizedBox(
+                width: 58,
+                child: Text(value,
+                    textAlign: TextAlign.right,
+                    style: const TextStyle(fontSize: 12))),
+            Expanded(
+              child: Row(children: [
+                for (var i = 0; i < 24; i++)
+                  Container(
+                    width: 5,
+                    height: 10,
+                    margin: const EdgeInsets.only(right: 1),
+                    color: ((bits >> i) & 1) == 1 ? _bar : Colors.white24,
+                  ),
+              ]),
+            ),
+          ]),
+        );
+      case HealthFlag(:final name, :final detail):
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 7),
+          child: Text.rich(TextSpan(children: [
+            TextSpan(
+                text: '\u26a0 $name',
+                style: const TextStyle(color: _amber)),
+            TextSpan(text: ' \u2014 $detail'),
+          ]), style: const TextStyle(fontSize: 12, color: Colors.white)),
+        );
+      case HealthNote(:final text):
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 7),
+          child:
+              Text(text, style: const TextStyle(fontSize: 12, color: Colors.white)),
+        );
+      case HealthGap(:final text):
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: Text(text, style: const TextStyle(fontSize: 11, color: _mute)),
+        );
+    }
   }
 }

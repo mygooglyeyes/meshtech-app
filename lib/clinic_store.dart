@@ -48,14 +48,13 @@ int growAgeMin(int wireAgeMin, int heardMs, int nowMs) {
   return grown > ageUnknownMin ? ageUnknownMin : grown;
 }
 
-/// The provenance label shown on EVERY fact (the plan: every fact is
-/// labeled first-hand/second-hand). The box id is the wire's u16 as
-/// hex - honest identity, no invented names.
+/// The provenance label shown on EVERY fact (Brett's words, 2026-09-29:
+/// "Direct" / "Reported", no "box", no "said it"). The id is the
+/// wire's u16 as hex - honest identity, no invented names (the tag is
+/// a boot-random number, so it carries no name to quote).
 String provenanceLabel(int source, int viaOrigin) {
   final head = source.toRadixString(16).padLeft(4, '0');
-  return source == viaOrigin
-      ? 'first-hand (box $head)'
-      : 'second-hand (box $head said it)';
+  return source == viaOrigin ? 'Direct ($head)' : 'Reported ($head)';
 }
 
 /// THE FLAG TABLE'S EXACT WORDS (CLINIC-WIRE.md: "meaning (exact

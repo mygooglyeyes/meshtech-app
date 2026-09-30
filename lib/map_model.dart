@@ -389,7 +389,7 @@ class ClinicLayerVM {
             markers.add(ClinicMarker(
               lat: f.lat!,
               lon: f.lon!,
-              label: '$label \u00b7 2nd',
+              label: '$label \u00b7 reported',
               color: ClinicColor.secondHand,
               target: ClinicNodeTarget(f.subject),
               claim: true,
@@ -421,7 +421,7 @@ class ClinicLayerVM {
   /// The names law (section 8): every node drawn carries its label -
   /// and a second-hand fact wears its hand right on the tag.
   static String _handLabel(String label, bool firstHand) =>
-      firstHand ? label : '$label \u00b7 2nd';
+      firstHand ? label : '$label \u00b7 reported';
 
   /// The wire's travel-order path -> drawable runs (gap-split: an
   /// unknown/positionless hop is an honest gap, never invented).
@@ -494,16 +494,104 @@ class ClinicLayerVM {
 /// THE TAP-DETAIL CARDS: one line per fact, EVERY line carrying its
 /// provenance label first. Missing numbers show as missing - never a
 /// plausible constant (the wire page's honesty rules).
+/// ONE row of a graphical health card (Brett's approved design,
+/// 2026-09-29): plain data, drawn by the section detail page. Facts
+/// come in BLOCKS: a provenance chip first, then that box's rows.
+sealed class HealthRow {
+  const HealthRow();
+}
+
+/// A family heading - Brett's four names, verbatim.
+class HealthFamily extends HealthRow {
+  final String name;
+  const HealthFamily(this.name);
+}
+
+/// The provenance chip: Direct (2f25) / Reported (beef).
+class HealthChip extends HealthRow {
+  final String label;
+  const HealthChip(this.label);
+}
+
+/// A fixed-scale mini bar: the pale span runs worst..best, the white
+/// tick sits at the average, [spread] reads at the side. Positions are
+/// 0..1 fractions of the row's FIXED scale (shared by kind, so two
+/// links compare at a glance - the wide bar IS the coin flip).
+class HealthBar extends HealthRow {
+  final String key; // 'SNR' / 'RSSI' / 'delay'
+  final String value; // '12.0 dB'
+  final String spread; // '+-0.5' or ''
+  final String note; // 'min/med/max' or ''
+  final double start;
+  final double end;
+  final double tick;
+  const HealthBar({
+    required this.key,
+    required this.value,
+    this.spread = '',
+    this.note = '',
+    required this.start,
+    required this.end,
+    required this.tick,
+  });
+}
+
+/// A block bar (traffic share): [filled] of [total] blocks.
+class HealthBlocks extends HealthRow {
+  final String key;
+  final String value;
+  final int filled;
+  final int total;
+  const HealthBlocks(
+      {required this.key,
+      required this.value,
+      required this.filled,
+      required this.total});
+}
+
+/// The 24-hour availability strip, as its honest bits.
+class HealthStrip extends HealthRow {
+  final String key;
+  final String value;
+  final int bits;
+  const HealthStrip(
+      {required this.key, required this.value, required this.bits});
+}
+
+/// One trouble flag - evidence in compact words, never a verdict.
+class HealthFlag extends HealthRow {
+  final String name; // 'rate storm'
+  final String detail; // '3 event(s), peak 22/min, last 2 min ago'
+  const HealthFlag({required this.name, required this.detail});
+}
+
+/// A small neutral fact note (ages, hops, route lines).
+class HealthNote extends HealthRow {
+  final String text;
+  const HealthNote(this.text);
+}
+
+/// An honest gap: a fact the mesh does not carry yet.
+class HealthGap extends HealthRow {
+  final String text;
+  const HealthGap(this.text);
+}
+
+/// The bars' FIXED scales (dB / dBm / seconds) - one scale per kind,
+/// so every row shares its axis and rows compare at a glance.
+const double snrScaleLo = -10, snrScaleHi = 20;
+const double rssiScaleLo = -120, rssiScaleHi = -70;
+const double delayScaleLo = 0, delayScaleHi = 15;
+double barFrac(double v, double lo, double hi) =>
+    ((v - lo) / (hi - lo)).clamp(0.0, 1.0);
+
 class ClinicCards {
   /// The node's whole clinic picture from every box: charts, its
   /// trouble flags, and what the peer boxes said about it.
   static List<String> nodeCard(ClinicStore clinic, NodeStore store, int prefix,
       {required int nowMs}) {
     final out = <String>[];
-    final n = store.nodes[prefix];
-    out.add(n == null
-        ? 'node ${prefix.toRadixString(16).padLeft(2, '0')}'
-        : n.label);
+    out.add(nodeTitle(store, prefix));
     for (final row in clinic.nodeFactsFor(prefix)) {
       out.add('${row.label} - chart: ${_chartText(row, nowMs)}');
     }
@@ -519,9 +607,7 @@ class ClinicCards {
   /// Every box's chart of ONE route (the trail, travel order).
   static List<String> routeCard(ClinicStore clinic, List<int> path,
       {required int nowMs}) {
-    final out = <String>[
-      'route ${path.map((p) => p.toRadixString(16).padLeft(2, '0')).join('-')}',
-    ];
+    final out = <String>[routeTitle(path)];
     for (final row in clinic.routeFacts) {
       if (row.fact.path.length != path.length) continue;
       var same = true;
@@ -532,6 +618,244 @@ class ClinicCards {
       out.add('${row.label} - ${_routeText(row, nowMs)}');
     }
     return out;
+  }
+
+  // THE HEALTH REPORT'S HONEST GAPS (Brett, 2026-09-29): facts the
+  // mesh does not carry yet, named out loud - never invented.
+  static const _gapAirtime =
+      'duplicates \u00b7 occupancy \u00b7 duty headroom: not measured yet';
+  static const _gapDelivery = 'loss \u00b7 retries \u00b7 reordering \u00b7 '
+      'request\u2192answer: not measured yet';
+  static const _gapStability =
+      'churn \u00b7 hash collisions: not measured yet';
+
+  /// The card titles (shared by the text cards and the section page).
+  static String nodeTitle(NodeStore store, int prefix) {
+    final n = store.nodes[prefix];
+    return n == null
+        ? 'node ${prefix.toRadixString(16).padLeft(2, '0')}'
+        : n.label;
+  }
+
+  static String routeTitle(List<int> path) =>
+      'route ${path.map((p) => p.toRadixString(16).padLeft(2, '0')).join('-')}';
+
+  /// THE HEALTH REPORT (Brett's approved graphical design,
+  /// 2026-09-29): a node's four health families - real numbers as
+  /// bars and strips (every block chipped Direct/Reported), and the
+  /// honest gaps where the mesh carries no such fact. No grades, no
+  /// verdicts - the numbers only.
+  static List<HealthRow> nodeHealthCard(ClinicStore clinic, int prefix,
+      {required int nowMs}) {
+    final out = <HealthRow>[];
+    final charts = clinic.nodeFactsFor(prefix);
+    final flags = clinic.flagsFor(prefix);
+    if (charts.isEmpty) out.add(const HealthNote('no chart yet'));
+    var chip = '';
+    void family(String name) {
+      out.add(HealthFamily(name));
+      chip = ''; // the chip repeats per family block
+    }
+
+    void wear(String label) {
+      if (label == chip) return;
+      out.add(HealthChip(label));
+      chip = label;
+    }
+
+    family('Link quality margins');
+    for (final row in charts) {
+      wear(row.label);
+      out.addAll(_marginBars(row.fact));
+    }
+
+    family('Airtime & congestion');
+    for (final row in charts) {
+      wear(row.label);
+      final f = row.fact;
+      out.add(shareIsUnknown(f.sharePct)
+          ? const HealthNote('share unknown')
+          : HealthBlocks(
+              key: 'share',
+              value: '${f.sharePct}%',
+              filled: (f.sharePct / 10).round(),
+              total: 10));
+    }
+    for (final row in flags) {
+      if (row.fact.flag != flagRateStorm) continue;
+      wear(row.label);
+      out.add(_flagRow(row, nowMs));
+    }
+    out.add(const HealthGap(_gapAirtime));
+
+    family('Delivery reliability & latency');
+    for (final row in charts) {
+      wear(row.label);
+      final h = row.fact.hopsTyp;
+      out.add(HealthNote(h == 0 ? 'Typical hops: unknown' : 'Typical hops: $h'));
+    }
+    for (final row in clinic.routeFacts) {
+      if (!row.fact.path.contains(prefix)) continue;
+      wear(row.label);
+      final f = row.fact;
+      out.addAll(_delayBars(f));
+      out.add(HealthNote('${routeTitle(f.path)} \u00b7 ${f.uses} uses \u00b7 '
+          'last ${ageText(row.ageMin(f.lastAgeMin, nowMs))}'));
+    }
+    out.add(const HealthGap(_gapDelivery));
+
+    family('Stability & hygiene');
+    for (final row in charts) {
+      wear(row.label);
+      final f = row.fact;
+      out.add(HealthStrip(
+          key: 'heard', value: '${_popcount(f.strip)}/24 h', bits: f.strip));
+      out.add(HealthNote('chart ${f.ageDays} days old \u00b7 '
+          'last heard ${ageText(row.ageMin(f.lastAgeMin, nowMs))}'));
+    }
+    for (final row in flags) {
+      final fl = row.fact.flag;
+      if (fl != flagSigFail && fl != flagTsBackwards) continue;
+      wear(row.label);
+      out.add(_flagRow(row, nowMs));
+    }
+    out.add(const HealthGap(_gapStability));
+    return out;
+  }
+
+  /// A route's health report: the same four families. The wire
+  /// carries NO per-hop signal for a trail - that family says so
+  /// honestly instead of borrowing a number from somewhere else.
+  static List<HealthRow> routeHealthCard(ClinicStore clinic, List<int> path,
+      {required int nowMs}) {
+    final rows = [
+      for (final row in clinic.routeFacts)
+        if (_samePath(row.fact.path, path)) row
+    ];
+    final out = <HealthRow>[];
+    if (rows.isEmpty) out.add(const HealthNote('no chart yet'));
+    var chip = '';
+    void family(String name) {
+      out.add(HealthFamily(name));
+      chip = '';
+    }
+
+    void wear(String label) {
+      if (label == chip) return;
+      out.add(HealthChip(label));
+      chip = label;
+    }
+
+    family('Link quality margins');
+    out.add(const HealthGap('per-hop signal: not measured yet'));
+
+    family('Airtime & congestion');
+    for (final row in rows) {
+      wear(row.label);
+      out.add(HealthNote('${row.fact.uses} use(s) counted'));
+    }
+    out.add(const HealthGap('duplicates: not measured yet'));
+
+    family('Delivery reliability & latency');
+    for (final row in rows) {
+      wear(row.label);
+      final f = row.fact;
+      out.addAll(_delayBars(f));
+      out.add(HealthNote(
+          '${f.direct == 1 ? 'straight from sender' : 'via trail'} \u00b7 '
+          'last used ${ageText(row.ageMin(f.lastAgeMin, nowMs))} \u00b7 '
+          'chart ${f.ageDays} days old'));
+    }
+    out.add(const HealthGap(_gapDelivery));
+
+    family('Stability & hygiene');
+    out.add(const HealthGap(_gapStability));
+    return out;
+  }
+
+  /// The margin rows: one fixed-scale bar per signal kind. Missing
+  /// stays missing - a bar is drawn only from real samples.
+  static List<HealthRow> _marginBars(ClinicNodeFact f) {
+    final out = <HealthRow>[];
+    if (signalIsUnknown(f.snrEwma)) {
+      out.add(const HealthNote('SNR unknown'));
+    } else {
+      final e = f.snrEwma / 4.0; // SNR rides quarter-dB
+      final lo = signalIsUnknown(f.snrWorst) ? e : f.snrWorst / 4.0;
+      final hi = signalIsUnknown(f.snrBest) ? e : f.snrBest / 4.0;
+      out.add(HealthBar(
+          key: 'SNR',
+          value: _sigQ(f.snrEwma),
+          spread: f.snrSd == signalSdUnknown
+              ? '\u00b1 n/a'
+              : '\u00b1${f.snrSd / 4}',
+          start: barFrac(lo, snrScaleLo, snrScaleHi),
+          end: barFrac(hi, snrScaleLo, snrScaleHi),
+          tick: barFrac(e, snrScaleLo, snrScaleHi)));
+    }
+    if (signalIsUnknown(f.rssiEwma)) {
+      out.add(const HealthNote('RSSI unknown'));
+    } else {
+      final e = f.rssiEwma.toDouble();
+      final lo = signalIsUnknown(f.rssiWorst) ? e : f.rssiWorst.toDouble();
+      final hi = signalIsUnknown(f.rssiBest) ? e : f.rssiBest.toDouble();
+      out.add(HealthBar(
+          key: 'RSSI',
+          value: '${f.rssiEwma} dBm',
+          spread:
+              f.rssiSd == signalSdUnknown ? '\u00b1 n/a' : '\u00b1${f.rssiSd}',
+          start: barFrac(lo, rssiScaleLo, rssiScaleHi),
+          end: barFrac(hi, rssiScaleLo, rssiScaleHi),
+          tick: barFrac(e, rssiScaleLo, rssiScaleHi)));
+    }
+    return out;
+  }
+
+  /// One route's delay bar (0 = unknown on the wire - it says so).
+  static List<HealthRow> _delayBars(ClinicRouteFact f) {
+    if (f.delayMinS == 0 && f.delayMedS == 0 && f.delayMaxS == 0) {
+      return const [HealthNote('delay unknown')];
+    }
+    String d(int v) => v == 0 ? '?' : '$v';
+    return [
+      HealthBar(
+          key: 'delay',
+          value: '${d(f.delayMinS)}/${d(f.delayMedS)}/${d(f.delayMaxS)} s',
+          note: 'min/med/max',
+          start: barFrac(f.delayMinS.toDouble(), delayScaleLo, delayScaleHi),
+          end: barFrac(f.delayMaxS.toDouble(), delayScaleLo, delayScaleHi),
+          tick: barFrac(f.delayMedS.toDouble(), delayScaleLo, delayScaleHi)),
+    ];
+  }
+
+  /// The flag in compact words (Brett, 2026-09-29): name, count,
+  /// detail, last seen. Evidence, never a verdict.
+  static HealthFlag _flagRow(ClinicRow<ClinicFlagFact> row, int nowMs) {
+    final f = row.fact;
+    final name = switch (f.flag) {
+      flagSigFail => 'signature failures',
+      flagTsBackwards => 'timestamps backwards',
+      flagRateStorm => 'rate storm',
+      flagCorruptShare => 'corrupt packets',
+      _ => 'flag ${f.flag}',
+    };
+    final detail = switch (f.flag) {
+      flagTsBackwards => ', worst jump ${f.detail} s',
+      flagRateStorm => ', peak ${f.detail}/min',
+      _ => '',
+    };
+    return HealthFlag(
+        name: name,
+        detail: '${f.events} ${f.events == 1 ? 'event' : 'events'}$detail, '
+            'last ${ageText(row.ageMin(f.lastAgeMin, nowMs))}');
+  }
+
+  static bool _samePath(List<int> a, List<int> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   /// The facts with NO place on the map (mesh-wide trouble + the
@@ -613,7 +937,8 @@ class ClinicCards {
         final place = f.lat == null
             ? 'no position reported'
             : 'at ${f.lat!.toStringAsFixed(5)}, ${f.lon!.toStringAsFixed(5)}';
-        final name = f.name.isEmpty ? '(no name)' : f.name;
+        // The name, if present, wears ' ' (Brett, 2026-09-29).
+      final name = f.name.isEmpty ? '(no name)' : "'${f.name}'";
         return 'said (said $said): $name, class ${f.cls}, $place';
       default:
         return 'unknown report (said $said)';

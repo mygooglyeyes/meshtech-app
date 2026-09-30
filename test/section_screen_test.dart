@@ -6,6 +6,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:meshtech_app/clinic_store.dart';
 import 'package:meshtech_app/codec.dart';
 import 'package:meshtech_app/map_model.dart';
 import 'package:meshtech_app/section_screen.dart';
@@ -20,6 +21,7 @@ const _cell = SectionCell(
 Widget _page({SectSum? summary, VoidCallback? onClose}) => MaterialApp(
       home: SectionScreen(
         store: NodeStore(),
+        clinic: ClinicStore(),
         cell: _cell,
         summary: summary,
         onClose: onClose ?? () {},
