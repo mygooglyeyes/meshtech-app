@@ -401,6 +401,27 @@ class _HealthRowView extends StatelessWidget {
   static const _mute = Color(0xFF9FC0E8);
   static const _amber = Color(0xFFFFD9A8);
 
+  /// One label cell that NEVER wraps mid-word (Brett's bench
+  /// 2026-09-29: 'share'/'heard' pushed their last letter to the
+  /// next line in the fixed column). A tight fit shrinks the text
+  /// instead of breaking it.
+  static Widget _cell(String text,
+      {required double width,
+      TextAlign align = TextAlign.left,
+      double fontSize = 12,
+      Color? color}) {
+    return SizedBox(
+        width: width,
+        child: FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment:
+                align == TextAlign.right ? Alignment.centerRight : Alignment.centerLeft,
+            child: Text(text,
+                textAlign: align,
+                maxLines: 1,
+                style: TextStyle(fontSize: fontSize, color: color))));
+  }
+
   @override
   Widget build(BuildContext context) {
     switch (row) {
@@ -411,12 +432,18 @@ class _HealthRowView extends StatelessWidget {
             padding: const EdgeInsets.only(bottom: 3),
             decoration: const BoxDecoration(
                 border: Border(bottom: BorderSide(color: Colors.white24))),
-            child: Text(name.toUpperCase(),
-                style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.4,
-                    color: _amber)),
+            child: SizedBox(
+                width: double.infinity,
+                child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text(name.toUpperCase(),
+                        maxLines: 1,
+                        style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.4,
+                            color: _amber)))),
           ),
         );
       case HealthChip(:final label):
@@ -448,15 +475,8 @@ class _HealthRowView extends StatelessWidget {
         return Padding(
           padding: const EdgeInsets.only(bottom: 7),
           child: Row(children: [
-            SizedBox(
-                width: 38,
-                child: Text(key,
-                    style: const TextStyle(fontSize: 12, color: _mute))),
-            SizedBox(
-                width: 58,
-                child: Text(value,
-                    textAlign: TextAlign.right,
-                    style: const TextStyle(fontSize: 12))),
+            _cell(key, width: 42, color: _mute),
+            _cell(value, width: 58, align: TextAlign.right),
             Expanded(
               child: LayoutBuilder(builder: (ctx, box) {
                 final w = box.maxWidth;
@@ -491,25 +511,16 @@ class _HealthRowView extends StatelessWidget {
                 );
               }),
             ),
-            SizedBox(
-                width: 52,
-                child: Text(spread.isNotEmpty ? spread : note,
-                    style: const TextStyle(fontSize: 11, color: _mute))),
+            _cell(spread.isNotEmpty ? spread : note,
+                width: 52, fontSize: 11, color: _mute),
           ]),
         );
       case HealthBlocks(:final key, :final value, :final filled, :final total):
         return Padding(
           padding: const EdgeInsets.only(bottom: 7),
           child: Row(children: [
-            SizedBox(
-                width: 38,
-                child: Text(key,
-                    style: const TextStyle(fontSize: 12, color: _mute))),
-            SizedBox(
-                width: 58,
-                child: Text(value,
-                    textAlign: TextAlign.right,
-                    style: const TextStyle(fontSize: 12))),
+            _cell(key, width: 42, color: _mute),
+            _cell(value, width: 58, align: TextAlign.right),
             Expanded(
               child: RichText(
                   text: TextSpan(
@@ -531,15 +542,8 @@ class _HealthRowView extends StatelessWidget {
         return Padding(
           padding: const EdgeInsets.only(bottom: 7),
           child: Row(children: [
-            SizedBox(
-                width: 38,
-                child: Text(key,
-                    style: const TextStyle(fontSize: 12, color: _mute))),
-            SizedBox(
-                width: 58,
-                child: Text(value,
-                    textAlign: TextAlign.right,
-                    style: const TextStyle(fontSize: 12))),
+            _cell(key, width: 42, color: _mute),
+            _cell(value, width: 58, align: TextAlign.right),
             Expanded(
               child: Row(children: [
                 for (var i = 0; i < 24; i++)
