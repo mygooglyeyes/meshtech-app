@@ -118,8 +118,8 @@ void main() {
           isEmpty);
     });
 
-    test('a section draws only the lines that come to or leave its '
-        'listed nodes', () {
+    test("a line never comes from a node off the section's list - the "
+        'incoming leg is a stub at the listed node', () {
       final s = _store(nowMs: nowMs);
       // Two neighbours the section does NOT list, east of Bob.
       s.upsert(NodeRecord(
@@ -144,16 +144,34 @@ void main() {
           spanLonM: 1000);
       // A trail through the section: in from Far1, out to Far2.
       s.applyRoute(_route(9, [0x24, 0x23, 0x25]), heardMs: nowMs);
-      // ...and a hop between the two unlisted neighbours.
+      // ...and a hop between the two off-list neighbours.
       s.applyRoute(_route(10, [0x24, 0x25]), heardMs: nowMs);
       final edges = MapViewModel.routeEdges(s,
           highlightIds: {9, 10}, showBackground: false, listedIn: cell);
-      // The incoming leg (unlisted -> listed) and the outgoing leg
-      // (listed -> unlisted) draw; the unlisted hop does not.
       expect(edges, hasLength(2));
       expect([for (final e in edges) e.routeId], [9, 9]);
-      expect(edges[0].from.$1, closeTo(-121.97, 1e-9)); // Far1 -> Bob
-      expect(edges[1].to.$1, closeTo(-121.96, 1e-9)); // Bob -> Far2
+      // THE INCOMING LEG (Far1 -> Bob) is a stub: the line never
+      // comes from off-list Far1 - it touches Bob's dot and extends
+      // outward toward Far1, naming Far1 at its outer end.
+      final incoming = edges[0];
+      expect(incoming.stub, isTrue);
+      expect(incoming.drawn[0], incoming.stop); // the outer end
+      expect(incoming.drawn[1].$1, closeTo(-121.98, 1e-9)); // touches Bob
+      expect(incoming.toName, s.nodes[0x24]!.label); // Far1's own label
+      // Its only arrow is AT Bob's dot, pointing into him.
+      final chevrons = [
+        for (final m in routeEdgeMarkers([incoming], selectedRoute: 9))
+          if (m.child is Transform) m,
+      ];
+      expect(chevrons, hasLength(1));
+      expect(chevrons.single.point.lon, closeTo(-121.98, 1e-9));
+      expect(chevrons.single.point.lat, closeTo(38.0, 1e-9));
+      // THE OUTGOING LEG (Bob -> Far2) draws from its listed sender
+      // as always.
+      final outgoing = edges[1];
+      expect(outgoing.stub, isFalse);
+      expect(outgoing.drawn[0].$1, closeTo(-121.98, 1e-9)); // from Bob
+      expect(outgoing.drawn[1], outgoing.stop);
       // With no section's list (the node page map), all draw.
       expect(
           MapViewModel.routeEdges(s,

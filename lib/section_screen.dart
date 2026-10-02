@@ -185,7 +185,7 @@ class _SectionScreenState extends State<SectionScreen> {
   /// tolerance wins (the pure pick math is unit-tested in
   /// map_model); null = a miss. ONE batched projection of every
   /// drawn point to screen pixels. The hit geometry is the DRAWN
-  /// geometry: dot to its 75% stop.
+  /// geometry ([RouteEdgeVM.drawn]), stubs included.
   int? _routeHitAt(Offset sp) {
     final map = _map;
     if (map == null) return null;
@@ -199,8 +199,8 @@ class _SectionScreenState extends State<SectionScreen> {
     final shape = <(int, int)>[]; // (routeId, points in this segment)
     for (final e in edges) {
       geos.addAll([
-        Geographic(lon: e.from.$1, lat: e.from.$2),
-        Geographic(lon: e.stop.$1, lat: e.stop.$2),
+        Geographic(lon: e.drawn[0].$1, lat: e.drawn[0].$2),
+        Geographic(lon: e.drawn[1].$1, lat: e.drawn[1].$2),
       ]);
       shape.add((e.routeId, 2));
     }

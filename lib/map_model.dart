@@ -39,7 +39,11 @@ typedef MapPoint = (double lon, double lat);
 /// pointing away from the sending node (next to the name being sent
 /// to) when it sends, pointing AT a node's dot when packets arrive
 /// there, and one at each end when the route runs both ways (the
-/// same trail heard reversed).
+/// same trail heard reversed). And a line NEVER comes from a node
+/// off the section's list (Brett, 2026-10-02, corrected): an
+/// incoming hop draws only a stub touching the listed node's dot,
+/// extending outward toward the off-list sender, arrowhead at the
+/// dot pointing into the node.
 class RouteEdgeVM {
   /// The sending node's dot (lon, lat).
   final MapPoint from;
@@ -51,7 +55,8 @@ class RouteEdgeVM {
   final MapPoint stop;
 
   /// The next node's name - the label at the line's end, drawn
-  /// only for the tapped route.
+  /// only for the tapped route. A stub names its off-list SENDER
+  /// instead (its far end points at the sender).
   final String toName;
 
   /// Travel direction on a north-up screen: degrees clockwise from
@@ -69,6 +74,12 @@ class RouteEdgeVM {
 
   /// Chevron at [from]'s dot, pointing at it (both ways only).
   final bool inArrowFrom;
+
+  /// The sender is OFF the section's list (Brett, 2026-10-02,
+  /// corrected): the line never comes from it - only a stub touches
+  /// the LISTED node's dot and extends outward toward the sender,
+  /// and the far end names the sender.
+  final bool stub;
   final int routeId;
   final bool hot;
   const RouteEdgeVM({
@@ -83,7 +94,13 @@ class RouteEdgeVM {
     this.outArrow = true,
     this.inArrowTo = true,
     this.inArrowFrom = false,
+    this.stub = false,
   });
+
+  /// The two points the map engine draws: [from] to [stop] - or for
+  /// a stub [stop] to [to], so the line touches the listed node's
+  /// dot and never reaches the off-list sender.
+  List<MapPoint> get drawn => stub ? [stop, to] : [from, stop];
 }
 
 class DotVM {
@@ -227,24 +244,31 @@ class MapViewModel {
         if (b?.lat == null || b?.lon == null) continue;
         final from = (a!.lon!, a.lat!);
         final to = (b!.lon!, b.lat!);
-        // THE LISTED LINES RULE (Brett, 2026-10-02): a hop draws
-        // only when it comes to a node the section lists or leaves
-        // one - a hop among unlisted nodes never draws.
+        // THE LISTED LINES LAW (Brett, 2026-10-02, corrected): a
+        // line never comes from a node off the section's list. A
+        // hop among off-list nodes never draws; a hop LEAVING a
+        // listed node draws as always; an INCOMING hop (off-list
+        // sender -> listed node) draws only the stub at the listed
+        // node's dot.
         if (listedIn != null &&
             !listedIn.contains(from.$2, from.$1) &&
             !listedIn.contains(to.$2, to.$1)) {
           continue;
         }
+        final stub =
+            listedIn != null && !listedIn.contains(from.$2, from.$1);
         out.add(RouteEdgeVM(
           routeId: r.routeId,
           hot: hot,
           from: from,
           to: to,
           stop: _stopAt(from, to, bounds),
-          toName: b.label,
+          // A stub's far end names the off-list sender.
+          toName: stub ? a.label : b.label,
           bearingDeg: _bearingDeg(from, to),
           bothWays: bothWays,
           inArrowFrom: bothWays,
+          stub: stub,
         ));
       }
     }

@@ -238,16 +238,18 @@ class _NodeRouteMap extends StatelessWidget {
 }
 
 /// The drawn lines under the route-line law: from each sending dot
-/// to its 75% stop - the map engine only ever sees ON-PAGE lines
-/// (Brett, 2026-10-01). SHARED with the section page.
+/// to its 75% stop - or, for a stub (off-list sender), from the
+/// listed node's dot out to the stop, never reaching the sender
+/// (Brett, 2026-10-02, corrected). The map engine only ever sees
+/// ON-PAGE lines. SHARED with the section page.
 List<Feature<LineString>> edgeLineFeatures(Iterable<RouteEdgeVM> edges) => [
       for (final e in edges)
         Feature(
           geometry: LineString([
-            e.from.$1,
-            e.from.$2,
-            e.stop.$1,
-            e.stop.$2,
+            e.drawn[0].$1,
+            e.drawn[0].$2,
+            e.drawn[1].$1,
+            e.drawn[1].$2,
           ].positions(Coords.xy)),
         ),
     ];
@@ -275,11 +277,13 @@ List<Marker> routeEdgeMarkers(List<RouteEdgeVM> edges,
                 style: const TextStyle(
                     fontSize: 11, color: Color(0xFFE07A2F))),
           ),
-        if (e.outArrow)
+        // A stub's only arrow is the one AT the listed node's dot,
+        // pointing into it (Brett's words, 2026-10-02).
+        if (e.outArrow && !e.stub)
           _chevron(e.stop, e.bearingDeg, e.hot || e.routeId == selectedRoute),
         if (e.inArrowTo)
           _chevron(e.to, e.bearingDeg, e.hot || e.routeId == selectedRoute),
-        if (e.inArrowFrom)
+        if (e.inArrowFrom && !e.stub)
           _chevron(e.from, e.bearingDeg + 180,
               e.hot || e.routeId == selectedRoute),
       ],
