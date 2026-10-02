@@ -37,10 +37,11 @@ void main() {
         mapBuilder: (_) => const SizedBox(key: Key('fake-node-map')),
       ),
     ));
-    expect(find.text('Hilltop 21'), findsOneWidget); // the title
+    expect(find.text('Hilltop'), findsOneWidget); // the title = the name
     // THE NODE'S OWN ROUTE MAP on top (Brett, 2026-10-01).
     expect(find.byKey(const Key('fake-node-map')), findsOneWidget);
-    expect(find.textContaining('prefix 21'), findsOneWidget);
+    expect(find.textContaining('Hilltop \u00b7 38.000, -122.000'),
+        findsOneWidget); // the name leads, no prefix
     expect(find.textContaining('NO POSITION'), findsNothing);
     // its clinic data underneath - honest gaps (nothing folded yet)
     expect(find.textContaining('not measured yet'), findsWidgets);
@@ -72,9 +73,11 @@ void main() {
     expect(find.byKey(const Key('trail-hop-33')), findsOneWidget);
     expect(find.byKey(const Key('trail-hop-34')), findsOneWidget);
     expect(find.byKey(const Key('trail-name-33')), findsOneWidget);
-    // names and details underneath
-    expect(find.textContaining('prefix 21'), findsOneWidget);
-    expect(find.textContaining('prefix 22'), findsOneWidget);
+    // names and details underneath (names lead - Brett 2026-10-02)
+    expect(find.textContaining('Hilltop \u00b7 38.000, -122.000'),
+        findsOneWidget);
+    expect(find.textContaining('Petaluma \u00b7 38.100, -122.100'),
+        findsOneWidget);
     expect(find.textContaining('2 hop(s)'), findsOneWidget);
     // and the clinic data
     expect(find.textContaining('not measured yet'), findsWidgets);
@@ -105,5 +108,19 @@ void main() {
     expect(find.text('unknown'), findsOneWidget); // the trail label
     expect(find.textContaining('nothing heard about it yet'),
         findsOneWidget);
+  });
+
+  test("a node's line says its NAME - the prefix only when no name "
+      'is known', () {
+    final s = _store();
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    s.upsert(NodeRecord(
+        prefix: 0x24, lat: 38.2, lon: -122.2,
+        lastHeardMs: nowMs)); // never named
+    expect(nodeIdentity(s, 0x21, nowMs: nowMs), startsWith('Hilltop \u00b7'));
+    expect(nodeIdentity(s, 0x24, nowMs: nowMs),
+        startsWith('prefix 24 \u00b7'));
+    expect(nodeIdentity(s, 0x99, nowMs: nowMs),
+        'prefix 99 - nothing heard about it yet');
   });
 }

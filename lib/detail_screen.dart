@@ -30,7 +30,9 @@ String ageText(int minutes) {
   return '${minutes ~/ 1440} d';
 }
 
-/// One node's identity line: prefix, its place (honestly "NO
+/// One node's identity line: its NAME when one is known (Brett,
+/// 2026-10-02: "the node name if possible, not the 2byte prefix,
+/// unless the name is not known"), its place (honestly "NO
 /// POSITION" - never invented), and when it was last heard.
 String nodeIdentity(NodeStore store, int prefix, {required int nowMs}) {
   final hex = prefix.toRadixString(16).padLeft(2, '0');
@@ -40,7 +42,8 @@ String nodeIdentity(NodeStore store, int prefix, {required int nowMs}) {
       ? 'NO POSITION'
       : '${n.lat!.toStringAsFixed(3)}, ${n.lon!.toStringAsFixed(3)}';
   final ageMin = ((nowMs - n.lastHeardMs) / 60000).round();
-  return 'prefix $hex \u00b7 $pos \u00b7 heard ${ageText(ageMin)} ago';
+  final who = (n.name == null || n.name!.isEmpty) ? 'prefix $hex' : n.name!;
+  return '$who \u00b7 $pos \u00b7 heard ${ageText(ageMin)} ago';
 }
 
 class NodeDetailScreen extends StatelessWidget {

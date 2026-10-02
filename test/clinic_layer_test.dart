@@ -231,7 +231,7 @@ void main() {
       ], origin: 0xb17e);
       final card = ClinicCards.nodeCard(clinic, _store(nowMs: nowMs), 0x21,
           nowMs: nowMs);
-      expect(card.first, 'Hilltop 21'); // the title is the node itself
+      expect(card.first, 'Hilltop'); // the title is the node's name (2026-10-02)
       final factLines = card.skip(1).toList();
       expect(factLines.length, 4);
       for (final line in factLines) {
@@ -297,14 +297,28 @@ void main() {
             lastAgeMin: 0,
             ageDays: 1),
       ]);
-      final card = ClinicCards.routeCard(clinic, const [0x21, 0x22],
+      final card = ClinicCards.routeCard(
+          clinic, _store(nowMs: nowMs), const [0x21, 0x22],
           nowMs: nowMs);
-      expect(card.first, 'route 21-22');
+      expect(card.first, 'route Hilltop-Alice');
       expect(card[1],
           'Direct (b17e) - route: 56 uses, via trail, '
           'delay min/med/max 2 s/4 s/9 s, last used 17 min ago, 2 days old');
       // Missing delays stay missing - never a plausible constant.
       expect(card[2], contains('delay min/med/max unknown/unknown/unknown'));
+    });
+
+    test('titles say the NAME - the hex head only when no name is known',
+        () {
+      final s = _store(nowMs: nowMs);
+      s.upsert(NodeRecord(
+          prefix: 0x23, lat: 38.02, lon: -122.0,
+          lastHeardMs: nowMs)); // never named
+      expect(ClinicCards.nodeTitle(s, 0x21), 'Hilltop');
+      expect(ClinicCards.nodeTitle(s, 0x23), 'node 23');
+      expect(ClinicCards.nodeTitle(s, 0x99), 'node 99');
+      expect(ClinicCards.routeTitle(s, const [0x21, 0x22, 0x23, 0x99]),
+          'route Hilltop-Alice-23-99');
     });
 
     test('the loose card lists what has no place - never pins it', () {

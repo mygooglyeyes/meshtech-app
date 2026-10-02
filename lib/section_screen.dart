@@ -243,7 +243,7 @@ class _SectionScreenState extends State<SectionScreen> {
       final r = hit == null ? null : widget.store.route(hit);
       if (r != null) {
         _openHealthCard(
-            ClinicCards.routeTitle(r.prefixes),
+            ClinicCards.routeTitle(widget.store, r.prefixes),
             ClinicCards.routeHealthCard(widget.clinic, r.prefixes,
                 nowMs: DateTime.now().millisecondsSinceEpoch));
       }

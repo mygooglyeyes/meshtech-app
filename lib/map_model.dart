@@ -817,9 +817,9 @@ class ClinicCards {
   }
 
   /// Every box's chart of ONE route (the trail, travel order).
-  static List<String> routeCard(ClinicStore clinic, List<int> path,
-      {required int nowMs}) {
-    final out = <String>[routeTitle(path)];
+  static List<String> routeCard(ClinicStore clinic, NodeStore store,
+      List<int> path, {required int nowMs}) {
+    final out = <String>[routeTitle(store, path)];
     for (final row in clinic.routeFacts) {
       if (row.fact.path.length != path.length) continue;
       var same = true;
@@ -841,16 +841,27 @@ class ClinicCards {
   static const _gapStability =
       'churn \u00b7 hash collisions: not measured yet';
 
-  /// The card titles (shared by the text cards and the section page).
+  /// The card titles (shared by the text cards, the detail pages and
+  /// the pop-ups).
+  ///
+  /// NAME FIRST (Brett, 2026-10-02: "the node name if possible, not
+  /// the 2byte prefix, unless the name is not known") - the hex head
+  /// shows only when no name was ever heard.
   static String nodeTitle(NodeStore store, int prefix) {
     final n = store.nodes[prefix];
-    return n == null
-        ? 'node ${prefix.toRadixString(16).padLeft(2, '0')}'
-        : n.label;
+    if (n != null && n.name != null && n.name!.isNotEmpty) return n.name!;
+    return 'node ${prefix.toRadixString(16).padLeft(2, '0')}';
   }
 
-  static String routeTitle(List<int> path) =>
-      'route ${path.map((p) => p.toRadixString(16).padLeft(2, '0')).join('-')}';
+  /// The route title names its hops (Brett, 2026-10-02) - a name
+  /// when known, the honest hex head when not.
+  static String routeTitle(NodeStore store, List<int> path) =>
+      'route ${path.map((p) {
+            final n = store.nodes[p];
+            return (n == null || n.name == null || n.name!.isEmpty)
+                ? p.toRadixString(16).padLeft(2, '0')
+                : n.name!;
+          }).join('-')}';
 
   /// THE HEALTH REPORT (Brett's approved graphical design,
   /// 2026-09-29): a node's four health families - real numbers as

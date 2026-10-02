@@ -547,7 +547,7 @@ class _MapScreenState extends State<MapScreen> {
     final r = widget.store.route(hit);
     if (r == null) return;
     _openHealthCard(
-        ClinicCards.routeTitle(r.prefixes),
+        ClinicCards.routeTitle(widget.store, r.prefixes),
         ClinicCards.routeHealthCard(widget.clinic, r.prefixes,
             nowMs: nowMs));
   }
