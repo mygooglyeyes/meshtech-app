@@ -192,7 +192,8 @@ class _SectionScreenState extends State<SectionScreen> {
     final edges = MapViewModel.routeEdges(widget.store,
         highlightIds: widget.hotRouteIds.toSet(),
         showBackground: _pastRoutes,
-        bounds: widget.cell.bounds());
+        bounds: widget.cell.bounds(),
+        listedIn: widget.cell);
     if (edges.isEmpty) return null;
     final geos = <Geographic>[];
     final shape = <(int, int)>[]; // (routeId, points in this segment)
@@ -256,11 +257,15 @@ class _SectionScreenState extends State<SectionScreen> {
     // THE ROUTE-LINE LAW (Brett, 2026-10-01): lines stop at 75%,
     // chevrons show the packets' direction - and nothing draws off
     // this page. The NEXT node's name labels only the TAPPED
-    // route's line end (Brett, 2026-10-02).
+    // route's line end (Brett, 2026-10-02). And the LISTED LINES
+    // RULE (same day): a line draws when it comes to or leaves a
+    // node this section's list names - zooming out never paints
+    // other sections' lines.
     final edges = MapViewModel.routeEdges(widget.store,
         highlightIds: widget.hotRouteIds.toSet(),
         showBackground: _pastRoutes,
-        bounds: widget.cell.bounds());
+        bounds: widget.cell.bounds(),
+        listedIn: widget.cell);
     // Paint order: faint background, then the warm summary lines,
     // then the selected line on top - orange lives HERE, never on
     // the main map (Brett, 2026-09-25).

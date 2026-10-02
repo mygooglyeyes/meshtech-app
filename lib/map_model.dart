@@ -198,10 +198,18 @@ class MapViewModel {
   /// [bounds] = (minLon, minLat, maxLon, maxLat) is the page the
   /// line must stay on: a stop that would leave it slides back along
   /// the line until it sits inside. Null = no page to respect.
+  ///
+  /// [listedIn] = the section whose LISTED nodes own the lines
+  /// (Brett, 2026-10-02: "if it comes to a node on the list or
+  /// leaves one on the list, then draw the lines as directed") -
+  /// a hop draws when it comes to a listed node or leaves one; the
+  /// list is the section page's own node list and zooming never
+  /// changes it. Null = every route's lines draw.
   static List<RouteEdgeVM> routeEdges(NodeStore store,
       {required Set<int> highlightIds,
       required bool showBackground,
-      (double, double, double, double)? bounds}) {
+      (double, double, double, double)? bounds,
+      SectionCell? listedIn}) {
     final out = <RouteEdgeVM>[];
     // Both ways = the same trail heard reversed.
     final trails =
@@ -219,6 +227,14 @@ class MapViewModel {
         if (b?.lat == null || b?.lon == null) continue;
         final from = (a!.lon!, a.lat!);
         final to = (b!.lon!, b.lat!);
+        // THE LISTED LINES RULE (Brett, 2026-10-02): a hop draws
+        // only when it comes to a node the section lists or leaves
+        // one - a hop among unlisted nodes never draws.
+        if (listedIn != null &&
+            !listedIn.contains(from.$2, from.$1) &&
+            !listedIn.contains(to.$2, to.$1)) {
+          continue;
+        }
         out.add(RouteEdgeVM(
           routeId: r.routeId,
           hot: hot,

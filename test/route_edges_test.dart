@@ -118,6 +118,49 @@ void main() {
           isEmpty);
     });
 
+    test('a section draws only the lines that come to or leave its '
+        'listed nodes', () {
+      final s = _store(nowMs: nowMs);
+      // Two neighbours the section does NOT list, east of Bob.
+      s.upsert(NodeRecord(
+          prefix: 0x24,
+          name: 'Far1',
+          lat: 38.0,
+          lon: -121.97,
+          lastHeardMs: nowMs));
+      s.upsert(NodeRecord(
+          prefix: 0x25,
+          name: 'Far2',
+          lat: 38.0,
+          lon: -121.96,
+          lastHeardMs: nowMs));
+      // The section lists Bob (0x23) alone - the page's own list
+      // rule (SectionCell.contains), and zooming never changes it.
+      const cell = SectionCell(
+          id: 5,
+          centerLat: 38.0,
+          centerLon: -121.98,
+          spanLatM: 1000,
+          spanLonM: 1000);
+      // A trail through the section: in from Far1, out to Far2.
+      s.applyRoute(_route(9, [0x24, 0x23, 0x25]), heardMs: nowMs);
+      // ...and a hop between the two unlisted neighbours.
+      s.applyRoute(_route(10, [0x24, 0x25]), heardMs: nowMs);
+      final edges = MapViewModel.routeEdges(s,
+          highlightIds: {9, 10}, showBackground: false, listedIn: cell);
+      // The incoming leg (unlisted -> listed) and the outgoing leg
+      // (listed -> unlisted) draw; the unlisted hop does not.
+      expect(edges, hasLength(2));
+      expect([for (final e in edges) e.routeId], [9, 9]);
+      expect(edges[0].from.$1, closeTo(-121.97, 1e-9)); // Far1 -> Bob
+      expect(edges[1].to.$1, closeTo(-121.96, 1e-9)); // Bob -> Far2
+      // With no section's list (the node page map), all draw.
+      expect(
+          MapViewModel.routeEdges(s,
+              highlightIds: {9, 10}, showBackground: false),
+          hasLength(3));
+    });
+
     test('the far-node name shows only for the tapped route', () {
       final s = _store(nowMs: nowMs);
       s.applyRoute(_route(7, [0x21, 0x22]), heardMs: nowMs);
