@@ -250,9 +250,10 @@ class _SectionScreenState extends State<SectionScreen> {
   Widget build(BuildContext context) {
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final dots = MapViewModel.dots(widget.store, nowMs: nowMs);
-    // THE ROUTE-LINE LAW (Brett, 2026-10-01): lines stop at 75%
-    // with the NEXT node's name at the end, chevrons show the
-    // packets' direction - and nothing draws off this page.
+    // THE ROUTE-LINE LAW (Brett, 2026-10-01): lines stop at 75%,
+    // chevrons show the packets' direction - and nothing draws off
+    // this page. The NEXT node's name labels only the TAPPED
+    // route's line end (Brett, 2026-10-02).
     final edges = MapViewModel.routeEdges(widget.store,
         highlightIds: widget.hotRouteIds.toSet(),
         showBackground: _pastRoutes,
@@ -595,9 +596,9 @@ class _SectionScreenState extends State<SectionScreen> {
                   ),
                 ),
               ),
-            // THE ROUTE-LINE LAW's markers: the next node's name at
-            // every line's end + the direction chevrons (Brett,
-            // 2026-10-01).
+            // THE ROUTE-LINE LAW's markers: the direction chevrons
+            // at every line + the next node's name only at the
+            // tapped route's line end (Brett, 2026-10-02).
             ...routeEdgeMarkers(edges, selectedRoute: _selRoute),
           ],
         ),

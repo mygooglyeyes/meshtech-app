@@ -1,12 +1,16 @@
 // BRETT'S ROUTE-LINE LAW (2026-10-01): a route line stops partway
-// (75% toward the NEXT node) with that node's name at the line's
-// end, chevrons say which way the packets move (out by the name
-// being sent to, in at a dot, one at each end when both ways = the
-// same trail heard reversed), and no line end ever leaves the page.
-// The honest-gap rule stands: an unknown hop breaks the line.
+// (75% toward the NEXT node), chevrons say which way the packets
+// move (out by the end being sent to, in at a dot, one at each end
+// when both ways = the same trail heard reversed), and no line end
+// ever leaves the page. The far node's name labels the line's end
+// ONLY for the tapped route (Brett, 2026-10-02). The honest-gap
+// rule stands: an unknown hop breaks the line.
 
+import 'package:flutter/widgets.dart' hide Route; // the wire's Route
 import 'package:flutter_test/flutter_test.dart';
+import 'package:maplibre/maplibre.dart';
 import 'package:meshtech_app/codec.dart';
+import 'package:meshtech_app/detail_screen.dart';
 import 'package:meshtech_app/map_model.dart';
 import 'package:meshtech_app/store.dart';
 
@@ -112,6 +116,28 @@ void main() {
           MapViewModel.routeEdges(s,
               highlightIds: const {}, showBackground: false),
           isEmpty);
+    });
+
+    test('the far-node name shows only for the tapped route', () {
+      final s = _store(nowMs: nowMs);
+      s.applyRoute(_route(7, [0x21, 0x22]), heardMs: nowMs);
+      s.applyRoute(_route(8, [0x22, 0x23]), heardMs: nowMs);
+      final edges = MapViewModel.routeEdges(s,
+          highlightIds: {7, 8}, showBackground: false);
+      List<String> names(List<Marker> ms) => [
+            for (final m in ms)
+              if (m.child is Text) (m.child as Text).data ?? '',
+          ];
+      // Nothing tapped: no names anywhere (the node page map lives
+      // here) - but the lines keep their chevrons.
+      expect(names(routeEdgeMarkers(edges)), isEmpty);
+      expect(routeEdgeMarkers(edges), isNotEmpty);
+      // Route 7 tapped: only ITS far node's name...
+      expect(names(routeEdgeMarkers(edges, selectedRoute: 7)),
+          [s.nodes[0x22]!.label]);
+      // ...and tapping route 8 moves the name to its line's end.
+      expect(names(routeEdgeMarkers(edges, selectedRoute: 8)),
+          [s.nodes[0x23]!.label]);
     });
   });
 }

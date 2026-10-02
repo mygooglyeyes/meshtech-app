@@ -107,10 +107,11 @@ class NodeDetailScreen extends StatelessWidget {
 
 /// THE NODE'S OWN ROUTE MAP (Brett, 2026-10-01): the page's node at
 /// the center, its routes' lines under the route-line law - each
-/// line stops at 75%, the NEXT node's name labels the line's end,
-/// chevrons show which way the packets move (in at a dot, out by the
-/// name being sent to, one at each end when both ways). Auto-zoomed
-/// to the node's nearby hops.
+/// line stops at 75%, chevrons show which way the packets move (in
+/// at a dot, out by the end being sent to, one at each end when both
+/// ways). Far-node names need a tap (Brett, 2026-10-02), and this
+/// map has no tapping - its dots carry the names. Auto-zoomed to
+/// the node's nearby hops.
 class _NodeRouteMap extends StatelessWidget {
   final NodeStore store;
   final int prefix;
@@ -252,25 +253,28 @@ List<Feature<LineString>> edgeLineFeatures(Iterable<RouteEdgeVM> edges) => [
     ];
 
 /// The route-line law's markers - SHARED with the section page:
-/// the NEXT node's name at every line's end, and the direction
-/// chevrons (at the stop pointing away when the node sends, at the
-/// dots pointing in when packets arrive, one at each end when the
-/// route runs both ways).
+/// the direction chevrons at every line (at the stop pointing away
+/// when the node sends, at the dots pointing in when packets
+/// arrive, one at each end when the route runs both ways), and the
+/// NEXT node's name ONLY at the tapped route's line (Brett,
+/// 2026-10-02: "only show the far node name when the route is
+/// tapped on"). A map with no tapping (the node page) shows no
+/// names at all.
 List<Marker> routeEdgeMarkers(List<RouteEdgeVM> edges,
         {int selectedRoute = 0}) =>
     [
       for (final e in edges) ...[
-        Marker(
-          point: Geographic(lon: e.stop.$1, lat: e.stop.$2),
-          size: const Size(120, 24),
-          alignment: Alignment.topCenter,
-          child: Text(e.toName,
-              style: TextStyle(
-                  fontSize: 11,
-                  color: (e.hot || e.routeId == selectedRoute)
-                      ? const Color(0xFFE07A2F)
-                      : Colors.black87)),
-        ),
+        if (selectedRoute != 0 && e.routeId == selectedRoute)
+          Marker(
+            point: Geographic(lon: e.stop.$1, lat: e.stop.$2),
+            size: const Size(120, 24),
+            alignment: Alignment.topCenter,
+            // Only the tapped route's name is ever drawn, so it is
+            // always the warm (selected) color.
+            child: Text(e.toName,
+                style: const TextStyle(
+                    fontSize: 11, color: Color(0xFFE07A2F))),
+          ),
         if (e.outArrow)
           _chevron(e.stop, e.bearingDeg, e.hot || e.routeId == selectedRoute),
         if (e.inArrowTo)

@@ -34,7 +34,8 @@ typedef MapPoint = (double lon, double lat);
 /// ONE DRAWN ROUTE LINE under BRETT'S ROUTE-LINE LAW (2026-10-01):
 /// a line never runs off the page - it stops partway (75% of the
 /// way toward the NEXT node in the trail), that node's name labels
-/// the line's end, and chevrons say which way the packets move:
+/// the line's end ONLY when the route is tapped (Brett,
+/// 2026-10-02), and chevrons say which way the packets move:
 /// pointing away from the sending node (next to the name being sent
 /// to) when it sends, pointing AT a node's dot when packets arrive
 /// there, and one at each end when the route runs both ways (the
@@ -49,7 +50,8 @@ class RouteEdgeVM {
   /// Where the line stops: 75% toward [to], kept on the page.
   final MapPoint stop;
 
-  /// The next node's name - the label at the line's end.
+  /// The next node's name - the label at the line's end, drawn
+  /// only for the tapped route.
   final String toName;
 
   /// Travel direction on a north-up screen: degrees clockwise from
@@ -190,7 +192,8 @@ class MapViewModel {
   /// per trail-adjacent KNOWN dot pair, in travel order (the honest-
   /// gap rule stands: an unknown hop breaks the line and it never
   /// bridges the gap), each carrying its 75% stop, the next node's
-  /// name at the line end, and the direction chevrons.
+  /// name (drawn at the line end only for the tapped route), and
+  /// the direction chevrons.
   ///
   /// [bounds] = (minLon, minLat, maxLon, maxLat) is the page the
   /// line must stay on: a stop that would leave it slides back along
