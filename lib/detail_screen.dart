@@ -13,10 +13,12 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart' hide Route;
+import 'package:maplibre/maplibre.dart';
 
 import 'clinic_store.dart';
 import 'codec.dart'; // the WIRE Route (Flutter's Route is hidden above)
 import 'map_model.dart';
+import 'map_screen.dart' show mapStyleUrl;
 import 'store.dart';
 
 /// How long ago, in the list's own words (the same honest rounding
@@ -47,12 +49,17 @@ class NodeDetailScreen extends StatelessWidget {
   final int prefix;
   final VoidCallback onClose;
 
+  /// THE MAP SEAM (the section page's own pattern): tests pump a
+  /// placeholder instead of a live map.
+  final WidgetBuilder? mapBuilder;
+
   const NodeDetailScreen({
     super.key,
     required this.store,
     required this.clinic,
     required this.prefix,
     required this.onClose,
+    this.mapBuilder,
   });
 
   @override
@@ -60,6 +67,8 @@ class NodeDetailScreen extends StatelessWidget {
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final rows =
         ClinicCards.nodeHealthCard(clinic, prefix, nowMs: nowMs);
+    final node = store.nodes[prefix];
+    final hasFix = node?.lat != null && node?.lon != null;
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(
@@ -73,6 +82,17 @@ class NodeDetailScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          // THE NODE'S OWN ROUTE MAP (Brett, 2026-10-01) on top -
+          // the node with NO position gets NO map: the identity line
+          // below already says NO POSITION, honestly.
+          if (hasFix)
+            SizedBox(
+              height: 240,
+              child: mapBuilder != null
+                  ? mapBuilder!(context)
+                  : _NodeRouteMap(store: store, prefix: prefix),
+            ),
+          if (hasFix) const SizedBox(height: 10),
           Text(
             nodeIdentity(store, prefix, nowMs: nowMs),
             style: Theme.of(context).textTheme.bodySmall,
@@ -84,6 +104,195 @@ class NodeDetailScreen extends StatelessWidget {
     );
   }
 }
+
+/// THE NODE'S OWN ROUTE MAP (Brett, 2026-10-01): the page's node at
+/// the center, its routes' lines under the route-line law - each
+/// line stops at 75%, the NEXT node's name labels the line's end,
+/// chevrons show which way the packets move (in at a dot, out by the
+/// name being sent to, one at each end when both ways). Auto-zoomed
+/// to the node's nearby hops.
+class _NodeRouteMap extends StatelessWidget {
+  final NodeStore store;
+  final int prefix;
+  const _NodeRouteMap({required this.store, required this.prefix});
+
+  List<Route> get _mine => [
+        for (final r in store.routes)
+          if (r.prefixes.contains(prefix)) r
+      ];
+
+  /// Every dot on those routes that has a position (honest: no fix,
+  /// no dot), focal node first.
+  List<(int, String, double, double)> _dots(List<Route> mine) {
+    final out = <(int, String, double, double)>[];
+    final seen = <int>{};
+    void add(int pfx) {
+      if (!seen.add(pfx)) return;
+      final d = store.nodes[pfx];
+      if (d?.lat == null || d?.lon == null) return;
+      out.add((pfx, d!.label, d.lat!, d.lon!));
+    }
+
+    add(prefix);
+    for (final r in mine) {
+      for (final pfx in r.prefixes) {
+        add(pfx);
+      }
+    }
+    return out;
+  }
+
+  /// The page this map paints: the dots' box, padded 30% (a lone
+  /// node gets a small neighborhood box around itself).
+  (double, double, double, double) _bounds(
+      List<(int, String, double, double)> dots) {
+    const padDeg = 0.015;
+    var minLat = 90.0, maxLat = -90.0, minLon = 180.0, maxLon = -180.0;
+    for (final d in dots) {
+      minLat = math.min(minLat, d.$3);
+      maxLat = math.max(maxLat, d.$3);
+      minLon = math.min(minLon, d.$4);
+      maxLon = math.max(maxLon, d.$4);
+    }
+    if (minLat > maxLat) return (-1, -1, 1, 1);
+    final padLat = math.max((maxLat - minLat) * 0.3, padDeg);
+    final padLon = math.max((maxLon - minLon) * 0.3, padDeg);
+    return (minLon - padLon, minLat - padLat, maxLon + padLon, maxLat + padLat);
+  }
+
+  /// The span to zoom for: the dots' box in meters (or a small
+  /// neighborhood for a lone node).
+  double _spanM(List<(int, String, double, double)> dots) {
+    const mPerDeg = 111320.0;
+    if (dots.length < 2) return 2000.0;
+    var minLat = 90.0, maxLat = -90.0, minLon = 180.0, maxLon = -180.0;
+    for (final d in dots) {
+      minLat = math.min(minLat, d.$3);
+      maxLat = math.max(maxLat, d.$3);
+      minLon = math.min(minLon, d.$4);
+      maxLon = math.max(maxLon, d.$4);
+    }
+    final midLat = (minLat + maxLat) / 2;
+    final dy = (maxLat - minLat) * mPerDeg;
+    final dx = (maxLon - minLon) * mPerDeg * math.cos(midLat * math.pi / 180);
+    return math.max(dx, dy) * 1.6; // margin so labels fit
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final n = store.nodes[prefix]!;
+    final mine = _mine;
+    final dots = _dots(mine);
+    final edges = MapViewModel.routeEdges(store,
+        highlightIds: {for (final r in mine) r.routeId},
+        showBackground: false,
+        bounds: _bounds(dots));
+    return MapLibreMap(
+      key: ValueKey('nodemap-$prefix'),
+      options: MapOptions(
+        initStyle: mapStyleUrl,
+        initCenter: Geographic(lon: n.lon!, lat: n.lat!),
+        initZoom: MapViewModel.zoomForSpan(_spanM(dots)),
+        // Same map lock as the other pages: fingers may zoom, the
+        // camera never strays on its own.
+        gestures: const MapGestures.none(zoom: true),
+      ),
+      layers: [
+        CircleLayer(
+          points: [
+            for (final d in dots)
+              Feature(geometry: Point(Geographic(lon: d.$4, lat: d.$3))),
+          ],
+          radius: 6,
+          color: const Color(0xFF4A90D9),
+          strokeColor: const Color(0xFFFFFFFF),
+          strokeWidth: 1,
+        ),
+        if (edges.isNotEmpty)
+          PolylineLayer(
+            polylines: edgeLineFeatures(edges),
+            color: const Color(0xFFE07A2F),
+            width: 3,
+          ),
+      ],
+      children: [
+        WidgetLayer(
+          allowInteraction: false,
+          markers: [
+            for (final d in dots)
+              Marker(
+                point: Geographic(lon: d.$4, lat: d.$3),
+                size: const Size(120, 24),
+                alignment: Alignment.topCenter,
+                child: Text(d.$2,
+                    style: const TextStyle(
+                        fontSize: 11, color: Colors.black87)),
+              ),
+            ...routeEdgeMarkers(edges),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// The drawn lines under the route-line law: from each sending dot
+/// to its 75% stop - the map engine only ever sees ON-PAGE lines
+/// (Brett, 2026-10-01). SHARED with the section page.
+List<Feature<LineString>> edgeLineFeatures(Iterable<RouteEdgeVM> edges) => [
+      for (final e in edges)
+        Feature(
+          geometry: LineString([
+            e.from.$1,
+            e.from.$2,
+            e.stop.$1,
+            e.stop.$2,
+          ].positions(Coords.xy)),
+        ),
+    ];
+
+/// The route-line law's markers - SHARED with the section page:
+/// the NEXT node's name at every line's end, and the direction
+/// chevrons (at the stop pointing away when the node sends, at the
+/// dots pointing in when packets arrive, one at each end when the
+/// route runs both ways).
+List<Marker> routeEdgeMarkers(List<RouteEdgeVM> edges,
+        {int selectedRoute = 0}) =>
+    [
+      for (final e in edges) ...[
+        Marker(
+          point: Geographic(lon: e.stop.$1, lat: e.stop.$2),
+          size: const Size(120, 24),
+          alignment: Alignment.topCenter,
+          child: Text(e.toName,
+              style: TextStyle(
+                  fontSize: 11,
+                  color: (e.hot || e.routeId == selectedRoute)
+                      ? const Color(0xFFE07A2F)
+                      : Colors.black87)),
+        ),
+        if (e.outArrow)
+          _chevron(e.stop, e.bearingDeg, e.hot || e.routeId == selectedRoute),
+        if (e.inArrowTo)
+          _chevron(e.to, e.bearingDeg, e.hot || e.routeId == selectedRoute),
+        if (e.inArrowFrom)
+          _chevron(e.from, e.bearingDeg + 180,
+              e.hot || e.routeId == selectedRoute),
+      ],
+    ];
+
+Marker _chevron(MapPoint p, double bearingDeg, bool warm) => Marker(
+      point: Geographic(lon: p.$1, lat: p.$2),
+      size: const Size(24, 24),
+      alignment: Alignment.center,
+      child: Transform.rotate(
+        // arrow_forward points east; the map is north-up.
+        angle: (bearingDeg - 90.0) * math.pi / 180.0,
+        child: Icon(Icons.arrow_forward,
+            size: 13,
+            color: warm ? const Color(0xFFE07A2F) : Colors.black87),
+      ),
+    );
 
 class RouteDetailScreen extends StatelessWidget {
   final NodeStore store;

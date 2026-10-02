@@ -31,6 +31,59 @@ class RouteLayer {
 /// around as these, so this file stays pure Dart (no map engine).
 typedef MapPoint = (double lon, double lat);
 
+/// ONE DRAWN ROUTE LINE under BRETT'S ROUTE-LINE LAW (2026-10-01):
+/// a line never runs off the page - it stops partway (75% of the
+/// way toward the NEXT node in the trail), that node's name labels
+/// the line's end, and chevrons say which way the packets move:
+/// pointing away from the sending node (next to the name being sent
+/// to) when it sends, pointing AT a node's dot when packets arrive
+/// there, and one at each end when the route runs both ways (the
+/// same trail heard reversed).
+class RouteEdgeVM {
+  /// The sending node's dot (lon, lat).
+  final MapPoint from;
+
+  /// The NEXT node's true position - never drawn past [stop].
+  final MapPoint to;
+
+  /// Where the line stops: 75% toward [to], kept on the page.
+  final MapPoint stop;
+
+  /// The next node's name - the label at the line's end.
+  final String toName;
+
+  /// Travel direction on a north-up screen: degrees clockwise from
+  /// up (0 = the packets fly north, 90 = east).
+  final double bearingDeg;
+
+  /// The same trail heard reversed = packets run both ways.
+  final bool bothWays;
+
+  /// Chevron at [stop], pointing away from the sending node.
+  final bool outArrow;
+
+  /// Chevron at [to]'s dot, pointing at it (packets arrive there).
+  final bool inArrowTo;
+
+  /// Chevron at [from]'s dot, pointing at it (both ways only).
+  final bool inArrowFrom;
+  final int routeId;
+  final bool hot;
+  const RouteEdgeVM({
+    required this.routeId,
+    required this.hot,
+    required this.from,
+    required this.to,
+    required this.stop,
+    required this.toName,
+    required this.bearingDeg,
+    required this.bothWays,
+    this.outArrow = true,
+    this.inArrowTo = true,
+    this.inArrowFrom = false,
+  });
+}
+
 class DotVM {
   final int prefix;
   final String label;
@@ -132,6 +185,94 @@ class MapViewModel {
     }
     return out;
   }
+
+  /// THE ROUTE EDGES (Brett's route-line law, 2026-10-01): one edge
+  /// per trail-adjacent KNOWN dot pair, in travel order (the honest-
+  /// gap rule stands: an unknown hop breaks the line and it never
+  /// bridges the gap), each carrying its 75% stop, the next node's
+  /// name at the line end, and the direction chevrons.
+  ///
+  /// [bounds] = (minLon, minLat, maxLon, maxLat) is the page the
+  /// line must stay on: a stop that would leave it slides back along
+  /// the line until it sits inside. Null = no page to respect.
+  static List<RouteEdgeVM> routeEdges(NodeStore store,
+      {required Set<int> highlightIds,
+      required bool showBackground,
+      (double, double, double, double)? bounds}) {
+    final out = <RouteEdgeVM>[];
+    // Both ways = the same trail heard reversed.
+    final trails =
+        <String>{for (final r in store.routes) r.prefixes.join(',')};
+    for (final r in store.routes) {
+      final hot = highlightIds.contains(r.routeId);
+      if (!hot && !showBackground) continue;
+      final bothWays = trails.contains(r.prefixes.reversed.join(','));
+      for (var i = 0; i + 1 < r.prefixes.length; i++) {
+        final a = store.nodes[r.prefixes[i]];
+        final b = store.nodes[r.prefixes[i + 1]];
+        // Honest gap: no known dot on either end, no line (never an
+        // invented position).
+        if (a?.lat == null || a?.lon == null) continue;
+        if (b?.lat == null || b?.lon == null) continue;
+        final from = (a!.lon!, a.lat!);
+        final to = (b!.lon!, b.lat!);
+        out.add(RouteEdgeVM(
+          routeId: r.routeId,
+          hot: hot,
+          from: from,
+          to: to,
+          stop: _stopAt(from, to, bounds),
+          toName: b.label,
+          bearingDeg: _bearingDeg(from, to),
+          bothWays: bothWays,
+          inArrowFrom: bothWays,
+        ));
+      }
+    }
+    return out;
+  }
+
+  /// 75% toward the next dot - slid back along the line when that
+  /// would leave the page (3% margin: room for the end label).
+  static MapPoint _stopAt(
+      MapPoint from, MapPoint to, (double, double, double, double)? bounds) {
+    var t = 0.75;
+    if (bounds != null) {
+      const margin = 0.03;
+      final (minLon, minLat, maxLon, maxLat) = bounds;
+      final padLon = (maxLon - minLon) * margin;
+      final padLat = (maxLat - minLat) * margin;
+      // The crossing t along the FULL line (from + t*(to - from)):
+      // v is where the 75% stop would land, `full` the whole step.
+      double axis(double f, double v, double full, double lo, double hi) {
+        if (v >= lo && v <= hi) return t; // on the page: no limit
+        if (full == 0) return 0.05;
+        final edge = v > hi ? hi : lo;
+        return (edge - f) / full;
+      }
+
+      final tl = axis(from.$1, from.$1 + t * (to.$1 - from.$1),
+          to.$1 - from.$1, minLon + padLon, maxLon - padLon);
+      final ta = axis(from.$2, from.$2 + t * (to.$2 - from.$2),
+          to.$2 - from.$2, minLat + padLat, maxLat - padLat);
+      t = math.max(0.05, math.min(t, math.min(tl, ta)));
+    }
+    return (from.$1 + t * (to.$1 - from.$1),
+        from.$2 + t * (to.$2 - from.$2));
+  }
+
+  /// Travel bearing on a north-up screen: degrees clockwise from up.
+  static double _bearingDeg(MapPoint from, MapPoint to) {
+    final dLat = to.$2 - from.$2;
+    final dLon = (to.$1 - from.$1) *
+        math.cos((from.$2 + to.$2) / 2 * math.pi / 180.0);
+    return math.atan2(dLon, dLat) * 180.0 / math.pi;
+  }
+
+  /// The camera zoom for a north-south span (the map's own rule:
+  /// 60 km -> z9, each doubling down -> +1, rounded).
+  static double zoomForSpan(double spanM) =>
+      (9 + math.log(60000.0 / spanM) / math.ln2).roundToDouble();
 
   /// THE TAP MATH (Brett's tap rule): the straight-line distance
   /// from a point to a segment - pure screen math, no engine.
@@ -1213,6 +1354,18 @@ class SectionCell {
         mPerDeg *
         math.cos(centerLat * math.pi / 180.0);
     return dLat <= spanLatM / 2 && dLon <= spanLonM / 2;
+  }
+
+  /// The page this cell paints - what keeps route lines from running
+  /// off it (Brett's route-line law, 2026-10-01):
+  /// (minLon, minLat, maxLon, maxLat).
+  (double, double, double, double) bounds() {
+    const mPerDeg = 111320.0;
+    final halfLat = (spanLatM / 2) / mPerDeg;
+    final halfLon = (spanLonM / 2) /
+        (mPerDeg * math.cos(centerLat * math.pi / 180.0));
+    return (centerLon - halfLon, centerLat - halfLat,
+        centerLon + halfLon, centerLat + halfLat);
   }
 }
 

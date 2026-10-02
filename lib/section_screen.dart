@@ -189,10 +189,11 @@ class _SectionScreenState extends State<SectionScreen> {
     if (e is! MapEventClick) return;
     final map = _map;
     if (map == null) return;
-    final layers = MapViewModel.routeLayers(widget.store,
+    final edges = MapViewModel.routeEdges(widget.store,
         highlightIds: widget.hotRouteIds.toSet(),
-        showBackground: _pastRoutes);
-    if (layers.isEmpty) {
+        showBackground: _pastRoutes,
+        bounds: widget.cell.bounds());
+    if (edges.isEmpty) {
       setState(() {
         _selPrefix = 0;
         _selRoute = 0;
@@ -200,14 +201,16 @@ class _SectionScreenState extends State<SectionScreen> {
       return;
     }
     // ONE batched projection of every drawn point to screen pixels,
-    // then the pure pick math (unit-tested in map_model).
+    // then the pure pick math (unit-tested in map_model). The hit
+    // geometry is the DRAWN geometry: dot to its 75% stop.
     final geos = <Geographic>[];
     final shape = <(int, int)>[]; // (routeId, points in this segment)
-    for (final l in layers) {
-      for (final seg in l.segs) {
-        geos.addAll([for (final p in seg) Geographic(lon: p.$1, lat: p.$2)]);
-        shape.add((l.routeId, seg.length));
-      }
+    for (final e in edges) {
+      geos.addAll([
+        Geographic(lon: e.from.$1, lat: e.from.$2),
+        Geographic(lon: e.stop.$1, lat: e.stop.$2),
+      ]);
+      shape.add((e.routeId, 2));
     }
     final pts = map.toScreenLocations(geos);
     final screen = <int, List<List<MapPoint>>>{};
@@ -247,29 +250,34 @@ class _SectionScreenState extends State<SectionScreen> {
   Widget build(BuildContext context) {
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final dots = MapViewModel.dots(widget.store, nowMs: nowMs);
-    final layers = MapViewModel.routeLayers(widget.store,
+    // THE ROUTE-LINE LAW (Brett, 2026-10-01): lines stop at 75%
+    // with the NEXT node's name at the end, chevrons show the
+    // packets' direction - and nothing draws off this page.
+    final edges = MapViewModel.routeEdges(widget.store,
         highlightIds: widget.hotRouteIds.toSet(),
-        showBackground: _pastRoutes);
+        showBackground: _pastRoutes,
+        bounds: widget.cell.bounds());
     // Paint order: faint background, then the warm summary lines,
     // then the selected line on top - orange lives HERE, never on
     // the main map (Brett, 2026-09-25).
     final faint = <List<MapPoint>>[];
     final hot = <List<MapPoint>>[];
     final sel = <List<MapPoint>>[];
-    for (final l in layers) {
-      if (l.routeId == _selRoute) {
-        sel.addAll(l.segs);
-      } else if (l.hot) {
-        hot.addAll(l.segs);
+    for (final e in edges) {
+      final line = [e.from, e.stop]; // the law: never past the stop
+      if (e.routeId == _selRoute) {
+        sel.add(line);
+      } else if (e.hot) {
+        hot.add(line);
       } else {
-        faint.addAll(l.segs);
+        faint.add(line);
       }
     }
     final body = _showList
         ? _listBody()
         : widget.mapBuilder != null
             ? widget.mapBuilder!(context)
-            : _buildMap(dots, faint, hot, sel, _clinicLayer(nowMs));
+            : _buildMap(dots, faint, hot, sel, _clinicLayer(nowMs), edges);
     return Scaffold(
       // The page's own bar: back to the map, which section this is,
       // the map/list switch (Brett, 2026-09-30), and the background
@@ -475,7 +483,8 @@ class _SectionScreenState extends State<SectionScreen> {
       List<List<MapPoint>> faint,
       List<List<MapPoint>> hot,
       List<List<MapPoint>> sel,
-      ClinicLayer? clinic) {
+      ClinicLayer? clinic,
+      List<RouteEdgeVM> edges) {
     final c = widget.cell;
     return MapLibreMap(
       key: ValueKey('sectmap-${c.id}'),
@@ -586,6 +595,10 @@ class _SectionScreenState extends State<SectionScreen> {
                   ),
                 ),
               ),
+            // THE ROUTE-LINE LAW's markers: the next node's name at
+            // every line's end + the direction chevrons (Brett,
+            // 2026-10-01).
+            ...routeEdgeMarkers(edges, selectedRoute: _selRoute),
           ],
         ),
         if (clinic != null)

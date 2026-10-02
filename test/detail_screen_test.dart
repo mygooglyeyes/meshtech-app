@@ -34,9 +34,12 @@ void main() {
         clinic: ClinicStore(),
         prefix: 0x21,
         onClose: () => closed = true,
+        mapBuilder: (_) => const SizedBox(key: Key('fake-node-map')),
       ),
     ));
     expect(find.text('Hilltop 21'), findsOneWidget); // the title
+    // THE NODE'S OWN ROUTE MAP on top (Brett, 2026-10-01).
+    expect(find.byKey(const Key('fake-node-map')), findsOneWidget);
     expect(find.textContaining('prefix 21'), findsOneWidget);
     expect(find.textContaining('NO POSITION'), findsNothing);
     // its clinic data underneath - honest gaps (nothing folded yet)
