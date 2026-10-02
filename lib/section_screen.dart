@@ -181,28 +181,19 @@ class _SectionScreenState extends State<SectionScreen> {
     });
   }
 
-  /// A tap ON THE MAP (not on a tag - the interactive label layer
-  /// eats those): which drawn route line did it hit? Nearest within
-  /// the tolerance wins; the same route again deselects; a miss
-  /// clears everything - an empty tap selects nothing, ever.
-  void _onMapEvent(MapEvent e) {
-    if (e is! MapEventClick) return;
+  /// The drawn route line at this screen point: nearest within the
+  /// tolerance wins (the pure pick math is unit-tested in
+  /// map_model); null = a miss. ONE batched projection of every
+  /// drawn point to screen pixels. The hit geometry is the DRAWN
+  /// geometry: dot to its 75% stop.
+  int? _routeHitAt(Offset sp) {
     final map = _map;
-    if (map == null) return;
+    if (map == null) return null;
     final edges = MapViewModel.routeEdges(widget.store,
         highlightIds: widget.hotRouteIds.toSet(),
         showBackground: _pastRoutes,
         bounds: widget.cell.bounds());
-    if (edges.isEmpty) {
-      setState(() {
-        _selPrefix = 0;
-        _selRoute = 0;
-      });
-      return;
-    }
-    // ONE batched projection of every drawn point to screen pixels,
-    // then the pure pick math (unit-tested in map_model). The hit
-    // geometry is the DRAWN geometry: dot to its 75% stop.
+    if (edges.isEmpty) return null;
     final geos = <Geographic>[];
     final shape = <(int, int)>[]; // (routeId, points in this segment)
     for (final e in edges) {
@@ -220,23 +211,35 @@ class _SectionScreenState extends State<SectionScreen> {
       i += len;
       (screen[routeId] ??= []).add(seg);
     }
-    final hit = MapViewModel.routeIdNear(
-        screen, (e.screenPoint.dx, e.screenPoint.dy), _pickTolerance);
-    setState(() {
-      if (hit == null) {
-        _selPrefix = 0; // an empty tap clears the lot - nothing
-        _selRoute = 0; // can stay selected against Brett's will
-      } else if (hit == _selRoute) {
-        _selRoute = 0; // the same tap deselects
-      } else {
-        _selRoute = hit; // a new element takes the selection
-        _selPrefix = 0;
-      }
-    });
-    // A tap ON a route ALSO opens its health report card (Brett,
-    // 2026-09-29) - the tap rules above never changed.
-    if (hit != null) {
-      final r = widget.store.route(hit);
+    return MapViewModel.routeIdNear(screen, (sp.dx, sp.dy), _pickTolerance);
+  }
+
+  /// A tap OR A HOLD ON THE MAP (not on a tag - the interactive
+  /// label layer eats those). TAP = THE SELECTION ONLY (Brett,
+  /// 2026-10-02: the route's card stays hidden until the hold):
+  /// nearest line wins, the same route again deselects, a miss
+  /// clears everything - an empty tap selects nothing, ever. HOLD
+  /// ON A ROUTE LINE = its health report card (the pop-up that used
+  /// to ride along with the tap); a hold on bare map does nothing.
+  void _onMapEvent(MapEvent e) {
+    if (_map == null) return;
+    if (e is MapEventClick) {
+      final hit = _routeHitAt(e.screenPoint);
+      setState(() {
+        if (hit == null) {
+          _selPrefix = 0; // an empty tap clears the lot - nothing
+          _selRoute = 0; // can stay selected against Brett's will
+        } else if (hit == _selRoute) {
+          _selRoute = 0; // the same tap deselects
+        } else {
+          _selRoute = hit; // a new element takes the selection
+          _selPrefix = 0;
+        }
+      });
+    } else if (e is MapEventLongClick) {
+      // THE CARD OPENS HERE AND ONLY HERE (Brett, 2026-10-02).
+      final hit = _routeHitAt(e.screenPoint);
+      final r = hit == null ? null : widget.store.route(hit);
       if (r != null) {
         _openHealthCard(
             ClinicCards.routeTitle(r.prefixes),
