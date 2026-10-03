@@ -334,7 +334,9 @@ class RouteDetailScreen extends StatelessWidget {
           icon: const Icon(Icons.arrow_back),
           onPressed: onClose,
         ),
-        title: Text('route ${route.routeId}'),
+        // NAMED BY ITS HOPS (Brett 2026-10-02): the route's id is a
+        // wire number no human can read - the hops' names are.
+        title: Text(ClinicCards.routeTitle(store, route.prefixes)),
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
@@ -389,8 +391,7 @@ class _TrailView extends StatelessWidget {
                 padding: EdgeInsets.symmetric(horizontal: 2),
                 child: Icon(Icons.arrow_forward,
                     size: 14, color: Colors.white54),
-              ),
-            SizedBox(
+              ),            SizedBox(
               key: ValueKey('trail-hop-${path[i]}'),
               width: 64,
               child: Column(
@@ -409,7 +410,10 @@ class _TrailView extends StatelessWidget {
                   ),
                   const SizedBox(height: 3),
                   Text(
-                    store.nodes[path[i]]?.name ?? 'unknown',
+                    // NAME FIRST (Brett 2026-10-02); no name = the
+                    // node's own hex key, never an invented word.
+                    store.nodes[path[i]]?.name ??
+                        'prefix ${path[i].toRadixString(16).padLeft(2, '0')}',
                     key: ValueKey('trail-name-${path[i]}'),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,

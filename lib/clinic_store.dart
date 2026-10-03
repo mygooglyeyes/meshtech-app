@@ -48,17 +48,20 @@ int growAgeMin(int wireAgeMin, int heardMs, int nowMs) {
   return grown > ageUnknownMin ? ageUnknownMin : grown;
 }
 
-/// The provenance label shown on EVERY fact (Brett's words, 2026-09-29:
-/// "Direct" / "Reported", no "box", no "said it"). The id is the
-/// wire's u16 as hex - honest identity, no invented names (the tag is
-/// a boot-random number, so it carries no name to quote).
-String provenanceLabel(int source, int viaOrigin) {
-  final head = tagHex(source);
-  return source == viaOrigin ? 'Direct ($head)' : 'Reported ($head)';
+/// The provenance label shown on EVERY fact (Brett's rules,
+/// 2026-10-02): the HOME box reads plain "Direct" - its 2-byte hex
+/// tag is useless to a human; another box shows ITS NAME (the name
+/// rides that box's own clinic packets); a box whose name was never
+/// heard shows the honest gap "unknown box" - never a boot-random
+/// hex tag, never an invented name.
+String provenanceLabel(int source, int viaOrigin, [String boxName = '']) {
+  if (source == viaOrigin) return 'Direct';
+  if (boxName.isNotEmpty) return boxName;
+  return 'unknown box';
 }
 
-/// The wire's u16 tag as 4-hex - the honest identity of a box or
-/// sender (a boot-random number, so it carries no name to quote).
+/// A box's wire tag as 4-hex - its raw identity. Kept for diagnostics;
+/// labels never show it (a human reads names, not hex).
 String tagHex(int tag) => tag.toRadixString(16).padLeft(4, '0');
 
 /// Per-mille rides the health wire (kinds 5-6); the words show
@@ -93,7 +96,12 @@ class ClinicRow<T> {
   final T fact;
   final int viaOrigin;
   final int heardMs; // epoch ms this copy arrived (the honest anchor)
-  const ClinicRow({required this.fact, required this.viaOrigin, required this.heardMs});
+
+  /// Resolves a box's name LIVE (so a name heard after this row still
+  /// labels it); null = no store behind this row (tests, debug rows).
+  final String Function(int origin)? nameOf;
+  const ClinicRow({required this.fact, required this.viaOrigin,
+      required this.heardMs, this.nameOf});
 
   bool get firstHand => _source == viaOrigin;
 
@@ -112,7 +120,8 @@ class ClinicRow<T> {
   /// The measuring/reporting box (the wire's `source`).
   int get source => _source;
 
-  String get label => provenanceLabel(_source, viaOrigin);
+  String get label => provenanceLabel(
+      _source, viaOrigin, nameOf?.call(_source) ?? '');
 
   /// The wire's minutes-since age, grown honestly since receipt.
   int ageMin(int wireAgeMin, int nowMs) => growAgeMin(wireAgeMin, heardMs, nowMs);
@@ -152,6 +161,13 @@ class ClinicStore {
   final Map<int, ClinicRow<ClinicExchangeFact>> _exchange = {};
   final Map<(String, int), ClinicRow<ClinicCollisionFact>> _collisions = {};
 
+  /// Box tag -> the name that box called itself on its OWN clinic
+  /// packets (the wire's name block). Feeds every label - a name
+  /// heard later still labels rows folded earlier.
+  final Map<int, String> _boxNames = {};
+
+  String boxNameOf(int origin) => _boxNames[origin] ?? '';
+
   Iterable<ClinicRow<ClinicNodeFact>> get nodeFacts => _nodes.values;
   Iterable<ClinicRow<ClinicRouteFact>> get routeFacts => _routes.values;
   Iterable<ClinicRow<ClinicFlagFact>> get flagFacts => _flags.values;
@@ -165,32 +181,43 @@ class ClinicStore {
   /// Fold one heard CLINIC packet (both pipes land here - the store
   /// is the one place facts live, whatever carried them).
   void fold(Clinic packet, {required int heardMs}) {
+    if (packet.name.isNotEmpty) {
+      _boxNames[packet.origin] = packet.name;
+    }
     for (final record in packet.records) {
       switch (record) {
         case ClinicNodeFact():
           _nodes[(record.prefix, record.source)] =
-              ClinicRow(fact: record, viaOrigin: packet.origin, heardMs: heardMs);
+              ClinicRow(fact: record, viaOrigin: packet.origin,
+                  heardMs: heardMs, nameOf: boxNameOf);
         case ClinicRouteFact():
           _routes[(_pathKey(record.path), record.source)] =
-              ClinicRow(fact: record, viaOrigin: packet.origin, heardMs: heardMs);
+              ClinicRow(fact: record, viaOrigin: packet.origin,
+                  heardMs: heardMs, nameOf: boxNameOf);
         case ClinicFlagFact():
           _flags[(record.flag, record.subject, record.source)] =
-              ClinicRow(fact: record, viaOrigin: packet.origin, heardMs: heardMs);
+              ClinicRow(fact: record, viaOrigin: packet.origin,
+                  heardMs: heardMs, nameOf: boxNameOf);
         case ClinicPeerFact():
           _peers[(record.report, record.subject, record.source)] =
-              ClinicRow(fact: record, viaOrigin: packet.origin, heardMs: heardMs);
+              ClinicRow(fact: record, viaOrigin: packet.origin,
+                  heardMs: heardMs, nameOf: boxNameOf);
         case ClinicAirtimeFact():
           _air[record.source] =
-              ClinicRow(fact: record, viaOrigin: packet.origin, heardMs: heardMs);
+              ClinicRow(fact: record, viaOrigin: packet.origin,
+                  heardMs: heardMs, nameOf: boxNameOf);
         case ClinicSenderFact():
           _senders[(record.sender, record.source)] =
-              ClinicRow(fact: record, viaOrigin: packet.origin, heardMs: heardMs);
+              ClinicRow(fact: record, viaOrigin: packet.origin,
+                  heardMs: heardMs, nameOf: boxNameOf);
         case ClinicExchangeFact():
           _exchange[record.source] =
-              ClinicRow(fact: record, viaOrigin: packet.origin, heardMs: heardMs);
+              ClinicRow(fact: record, viaOrigin: packet.origin,
+                  heardMs: heardMs, nameOf: boxNameOf);
         case ClinicCollisionFact():
           _collisions[(_tagKey(record.tag), record.source)] =
-              ClinicRow(fact: record, viaOrigin: packet.origin, heardMs: heardMs);
+              ClinicRow(fact: record, viaOrigin: packet.origin,
+                  heardMs: heardMs, nameOf: boxNameOf);
       }
     }
   }
@@ -300,6 +327,11 @@ class ClinicStore {
           for (final r in _peers.values)
             _rowJson(encodeClinicRecord(r.fact), r)
         ],
+        // box tag -> the name that box called itself: learned from
+        // the wire's name block, kept so labels survive a restart.
+        'names': {
+          for (final e in _boxNames.entries) e.key.toString(): e.value,
+        },
       });
 
   static Map<String, Object?> _rowJson(Uint8List bytes, ClinicRow row) => {
@@ -325,22 +357,33 @@ class ClinicStore {
 
     addAll(j['n'] as List<Object?>?, (fact, v, h) {
       final f = fact as ClinicNodeFact;
-      _nodes[(f.prefix, f.source)] = ClinicRow(fact: f, viaOrigin: v, heardMs: h);
+      _nodes[(f.prefix, f.source)] = ClinicRow(fact: f, viaOrigin: v,
+          heardMs: h, nameOf: boxNameOf);
     });
     addAll(j['r'] as List<Object?>?, (fact, v, h) {
       final f = fact as ClinicRouteFact;
-      _routes[(_pathKey(f.path), f.source)] =
-          ClinicRow(fact: f, viaOrigin: v, heardMs: h);
+      _routes[(_pathKey(f.path), f.source)] = ClinicRow(
+          fact: f, viaOrigin: v, heardMs: h, nameOf: boxNameOf);
     });
     addAll(j['f'] as List<Object?>?, (fact, v, h) {
       final f = fact as ClinicFlagFact;
-      _flags[(f.flag, f.subject, f.source)] =
-          ClinicRow(fact: f, viaOrigin: v, heardMs: h);
+      _flags[(f.flag, f.subject, f.source)] = ClinicRow(
+          fact: f, viaOrigin: v, heardMs: h, nameOf: boxNameOf);
     });
     addAll(j['p'] as List<Object?>?, (fact, v, h) {
       final f = fact as ClinicPeerFact;
-      _peers[(f.report, f.subject, f.source)] =
-          ClinicRow(fact: f, viaOrigin: v, heardMs: h);
+      _peers[(f.report, f.subject, f.source)] = ClinicRow(
+          fact: f, viaOrigin: v, heardMs: h, nameOf: boxNameOf);
+    });
+    // The box names ride beside the rows (tag keys are stored as
+    // strings - JSON keys are strings; a non-numeric key is skipped
+    // honestly, never guessed at).
+    final names = (j['names'] as Map?)?.cast<String, Object?>() ?? const {};
+    names.forEach((key, value) {
+      final origin = int.tryParse(key);
+      if (origin != null && value is String && value.isNotEmpty) {
+        _boxNames[origin] = value;
+      }
     });
     prune(nowMs: nowMs);
   }
@@ -350,5 +393,6 @@ class ClinicStore {
     _routes.clear();
     _flags.clear();
     _peers.clear();
+    _boxNames.clear();
   }
 }

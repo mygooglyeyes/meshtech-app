@@ -143,8 +143,10 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Routes'));
     await tester.pumpAndSettle();
-    expect(find.text('route 77'), findsOneWidget); // this square
-    expect(find.text('route 88'), findsNothing); // not this square
+    // Named by its hops (Brett 2026-10-02): the store knows nothing
+    // about 11/12, so the honest hex fallback leads each hop.
+    expect(find.text('route 11-12'), findsOneWidget); // this square
+    expect(find.text('route 13-14'), findsNothing); // not this square
     await tester.tap(find.byKey(const Key('section-list')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('fake-sect-map')), findsOneWidget);

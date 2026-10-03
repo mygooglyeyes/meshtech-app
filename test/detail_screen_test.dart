@@ -43,6 +43,7 @@ void main() {
     expect(find.textContaining('Hilltop \u00b7 38.000, -122.000'),
         findsOneWidget); // the name leads, no prefix
     expect(find.textContaining('NO POSITION'), findsNothing);
+    expect(find.textContaining('prefix 21'), findsNothing);
     // its clinic data underneath - honest gaps (nothing folded yet)
     expect(find.textContaining('not measured yet'), findsWidgets);
     await tester.tap(find.byKey(const Key('detail-back')));
@@ -68,7 +69,8 @@ void main() {
         onClose: () => closed = true,
       ),
     ));
-    expect(find.text('route 77'), findsOneWidget); // the title
+    // NAMED BY ITS HOPS (Brett 2026-10-02), not by wire id.
+    expect(find.text('route Hilltop-Petaluma'), findsOneWidget);
     // the VISUAL: both trail nodes drawn (0x21 = 33, 0x22 = 34)
     expect(find.byKey(const Key('trail-hop-33')), findsOneWidget);
     expect(find.byKey(const Key('trail-hop-34')), findsOneWidget);
@@ -78,6 +80,8 @@ void main() {
         findsOneWidget);
     expect(find.textContaining('Petaluma \u00b7 38.100, -122.100'),
         findsOneWidget);
+    expect(find.textContaining('NO NAME'), findsNothing);
+    expect(find.textContaining('prefix'), findsNothing); // named hops
     expect(find.textContaining('2 hop(s)'), findsOneWidget);
     // and the clinic data
     expect(find.textContaining('not measured yet'), findsWidgets);
@@ -105,8 +109,9 @@ void main() {
     ));
     // 0x99 = 153: drawn, but the store knows nothing about it
     expect(find.byKey(const Key('trail-hop-153')), findsOneWidget);
-    expect(find.text('unknown'), findsOneWidget); // the trail label
-    expect(find.textContaining('nothing heard about it yet'),
+    // No name in the store = the node's own hex key, never invented.
+    expect(find.text('prefix 99'), findsOneWidget); // the trail label
+    expect(find.textContaining('prefix 99 - nothing heard about it yet'),
         findsOneWidget);
   });
 

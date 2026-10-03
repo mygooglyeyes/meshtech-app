@@ -75,7 +75,8 @@ void main() {
 
     await tester.tap(find.textContaining('Routes ('));
     await tester.pumpAndSettle();
-    await tester.tap(find.textContaining('route 77'));
+    // Named by its hops (Brett 2026-10-02), hex fallback per hop.
+    await tester.tap(find.textContaining('route 11-12'));
     await tester.pumpAndSettle();
     expect(routes, [77]);
   });

@@ -128,7 +128,8 @@ class _BrowserScreenState extends State<BrowserScreen> {
             color: placed ? const Color(0xFF4A90D9) : Colors.grey,
             size: 20,
           ),
-          title: Text(n.name ?? 'prefix ${n.prefix}'),
+          title: Text(n.name ??
+              'prefix ${n.prefix.toRadixString(16).padLeft(2, '0')}'),
           subtitle: Text(
             'prefix ${n.prefix.toRadixString(16).padLeft(2, '0')}'
             '${placed ? '' : ' - NO POSITION'} - heard $age ago',
@@ -171,7 +172,9 @@ class _BrowserScreenState extends State<BrowserScreen> {
           dense: true,
           leading: Icon(Icons.route, size: 20,
               color: stale ? const Color(0xFFF5C518) : null),
-          title: Text('route ${r.routeId}'
+          // NAMED BY ITS HOPS (Brett 2026-10-02): the route id is a
+          // wire number no human can read - the hops' names are.
+          title: Text('${ClinicCards.routeTitle(widget.store, r.prefixes)}'
               '${stale ? '  -  STALE' : ''}',
               style: stale
                   ? const TextStyle(color: Color(0xFFF5C518))

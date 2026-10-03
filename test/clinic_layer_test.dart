@@ -229,6 +229,10 @@ void main() {
             lon: -122.0,
             name: 'Hilltop'),
       ], origin: 0xb17e);
+      // The peer box named itself on its own packet: its rows show
+      // the NAME; the never-named box keeps the honest gap.
+      clinic.fold(const Clinic(seq: 2, origin: 0xbeef, name: 'PeerBox'),
+          heardMs: nowMs);
       final card = ClinicCards.nodeCard(clinic, _store(nowMs: nowMs), 0x21,
           nowMs: nowMs);
       expect(card.first, 'Hilltop'); // the title is the node's name (2026-10-02)
@@ -236,13 +240,16 @@ void main() {
       expect(factLines.length, 4);
       for (final line in factLines) {
         expect(
-            line.startsWith('Direct (') || line.startsWith('Reported ('),
+            line.startsWith('Direct - ') ||
+                line.startsWith('PeerBox - ') ||
+                line.startsWith('unknown box - '),
             isTrue,
             reason: 'unlabeled fact: $line');
       }
-      expect(factLines.where((l) => l.contains('(b17e)')).length, 1);
-      expect(factLines.where((l) => l.contains('(beef)')).length, 2);
-      expect(factLines.where((l) => l.contains('(cafe)')).length, 1);
+      expect(factLines.where((l) => l.startsWith('Direct - ')).length, 1);
+      expect(factLines.where((l) => l.startsWith('PeerBox - ')).length, 2);
+      expect(
+          factLines.where((l) => l.startsWith('unknown box - ')).length, 1);
     });
   });
 
@@ -302,7 +309,7 @@ void main() {
           nowMs: nowMs);
       expect(card.first, 'route Hilltop-Alice');
       expect(card[1],
-          'Direct (b17e) - route: 56 uses, via trail, '
+          'Direct - route: 56 uses, via trail, '
           'delay min/med/max 2 s/4 s/9 s, last used 17 min ago, 2 days old');
       // Missing delays stay missing - never a plausible constant.
       expect(card[2], contains('delay min/med/max unknown/unknown/unknown'));
@@ -342,12 +349,13 @@ void main() {
       expect(card.first, 'facts without a place');
       expect(
           card[1],
-          'Direct (b17e) - corrupt packets are 12.5% of heard '
+          'Direct - corrupt packets are 12.5% of heard '
           'traffic (band noise or a broken transmitter \u2014 never '
           'blamed on a sender) - 4 event(s), first 30 min ago, '
           'last 5 min ago');
+      // beef's name was never heard: the honest gap, never hex.
       expect(card[2],
-          'Reported (beef) - pulse (said 4 min ago): '
+          'unknown box - pulse (said 4 min ago): '
           'uptime 21 h, 4/h, 40 active, airtime 9 s/h');
     });
 
@@ -438,10 +446,10 @@ void main() {
         'Delivery reliability & latency',
         'Stability & hygiene',
       ]);
-      // The provenance chip: Direct / Reported - no "box", no
-      // "said it" (Brett, 2026-09-29).
+      // The provenance chip: Direct / the box's NAME / the honest
+      // "unknown box" gap - never a hex tag (Brett, 2026-10-02).
       final chips = [for (final r in card) if (r is HealthChip) r.label];
-      expect(chips, contains('Direct (b17e)'));
+      expect(chips, contains('Direct'));
       // The margins: average AND spread on fixed-scale bars - the
       // numbers only, no grade.
       final snr = card.whereType<HealthBar>().firstWhere((b) => b.key == 'SNR');
@@ -509,7 +517,7 @@ void main() {
         'Stability & hygiene',
       ]);
       expect(card.whereType<HealthChip>().map((c) => c.label),
-          contains('Direct (b17e)'));
+          contains('Direct'));
       expect(card.whereType<HealthNote>().map((n) => n.text),
           contains('56 use(s) counted'));
       // The three-bar law (Brett, 2026-09-30): a TOTAL of three

@@ -12,8 +12,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 const _hourMs = 3600 * 1000;
 const _dayMs = 24 * _hourMs;
 
-Clinic _packet({required int origin, required List<Object> records}) =>
-    Clinic(seq: 1, origin: origin, records: records);
+Clinic _packet(
+        {required int origin,
+        required List<Object> records,
+        String name = ''}) =>
+    Clinic(seq: 1, origin: origin, records: records, name: name);
 
 ClinicNodeFact _chart(
         {required int source, int prefix = 0x21, int lastAgeMin = 3}) =>
@@ -92,10 +95,15 @@ void main() {
           heardMs: now);
       final own = s.nodeFactsFor(0x21).single;
       expect(own.firstHand, isTrue);
-      expect(own.label, 'Direct (b17e)');
+      expect(own.label, 'Direct'); // home box, no hex, no invented name
       final peer = s.nodeFactsFor(0x33).single;
       expect(peer.firstHand, isFalse);
-      expect(peer.label, 'Reported (beef)');
+      expect(peer.label, 'unknown box'); // name never heard - honest gap
+      // The peer's own named packet teaches the store its name; the
+      // row folded EARLIER picks the name up (labels resolve live).
+      s.fold(_packet(origin: 0xbeef, records: const [], name: 'TestBox'),
+          heardMs: now);
+      expect(peer.label, 'TestBox');
     });
 
     test('two boxes measuring one node = TWO rows, never merged', () {
@@ -270,7 +278,7 @@ void main() {
       final s = ClinicStore();
       final now = DateTime.now().millisecondsSinceEpoch;
       s.fold(
-          _packet(origin: 0xbeef, records: [
+          _packet(origin: 0xbeef, name: 'BeefBox', records: [
             _chart(source: 0xb17e, lastAgeMin: 5),
             _routeFact(source: 0xbeef),
             _flag(source: 0xbeef),
@@ -286,7 +294,10 @@ void main() {
       // it - so the row is second-hand, never re-worded.
       expect(chart.firstHand, isFalse);
       expect(chart.viaOrigin, 0xbeef);
-      expect(chart.label, 'Reported (b17e)');
+      // b17e's own name was never heard: the honest gap, not hex.
+      expect(chart.label, 'unknown box');
+      // The sending box's name rides through the restart too.
+      expect(back.boxNameOf(0xbeef), 'BeefBox');
       expect(chart.ageMin(chart.fact.lastAgeMin, now), 15);
       expect(back.routeFacts.length, 1);
       expect(back.flagFacts.length, 1);
@@ -366,8 +377,11 @@ void main() {
     });
 
     test('the provenance label names the box honestly', () {
-      expect(provenanceLabel(0xb17e, 0xb17e), 'Direct (b17e)');
-      expect(provenanceLabel(0x0001, 0xb17e), 'Reported (0001)');
+      // The home box reads plain Direct; another box shows its NAME
+      // when known and the honest gap when not - never a hex tag.
+      expect(provenanceLabel(0xb17e, 0xb17e), 'Direct');
+      expect(provenanceLabel(0x0001, 0xb17e), 'unknown box');
+      expect(provenanceLabel(0x0001, 0xb17e, 'Hilltop2'), 'Hilltop2');
     });
   });
 
@@ -410,8 +424,8 @@ void main() {
       expect(c.airtimeFacts.length, 1);
       expect(c.senderFacts.length, 1); // same (tag, box): replaced
       expect(c.senderFacts.single.fact.lost, 5); // newest receipt wins
-      expect(c.airtimeFacts.single.label, 'Direct (b17e)');
-      expect(c.senderFacts.single.label, 'Reported (beef)');
+      expect(c.airtimeFacts.single.label, 'Direct');
+      expect(c.senderFacts.single.label, 'unknown box');
       // The honest age grows from receipt, never frozen.
       expect(c.senderFacts.single.ageMin(0, nowMs + 120000), 1);
     });

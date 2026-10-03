@@ -29,6 +29,7 @@ const int protoVersion = 0x05;
 const int protoVersionRefresh = 0x06;
 const int protoVersionGone = 0x06;
 const int protoVersionIntro = 0x06; // INTRO: the ruler span, 3 LE bytes
+const int protoVersionClinic = 0x06; // CLINIC: the sender's name block
 
 const int typeGone = 0x5312;
 // HEARTBEAT (0x5313, Brett's airtime rule 2026-09-26): the app's tiny
@@ -1120,7 +1121,13 @@ class Clinic {
   final int seq;
   final int origin; // the box SENDING this packet
   final List<Object> records;
-  const Clinic({required this.seq, this.origin = 0, this.records = const []});
+
+  /// The SENDING box's own name (CLINIC-WIRE.md's name block, proto
+  /// 0x06): '' = the sender sent no name - an honest gap, never an
+  /// invented label.
+  final String name;
+  const Clinic({required this.seq, this.origin = 0, this.records = const [],
+      this.name = ''});
 }
 
 /// Minutes since, on the wire: capped at ageUnknownMin (never a
@@ -1352,14 +1359,29 @@ Uint8List encodeClinicRecord(Object record) {
 
 /// Full CLINIC plaintext (with envelope). Hard caps from the wire
 /// page: at most 7 records, whole plaintext <= maxChannelData.
+///
+/// [name] = the SENDING box's own name. A non-empty name adds the
+/// wire page's name block and declares proto 0x06; an empty name
+/// keeps the old 0x05 bytes exactly (an old golden vector re-encodes
+/// byte-identical).
 Uint8List encodeClinic(List<Object> records,
-    {required int seq, int origin = 0}) {
+    {required int seq, int origin = 0, String name = ''}) {
   if (records.length > clinicMaxRecords) {
     throw CodecError('too many clinic records: ${records.length} > '
         '$clinicMaxRecords');
   }
+  final nameBytes = utf8.encode(name);
+  if (nameBytes.length > maxName) {
+    throw CodecError('clinic box name longer than $maxName B: '
+        '${nameBytes.length} B');
+  }
   final body = BytesBuilder();
-  body.add(packHeader(seq, origin));
+  if (nameBytes.isNotEmpty) {
+    body.add(packHeader(seq, origin, version: protoVersionClinic));
+    body.add([nameBytes.length, ...nameBytes]);
+  } else {
+    body.add(packHeader(seq, origin));
+  }
   body.add([records.length]);
   for (final record in records) {
     body.add(encodeClinicRecord(record));
@@ -1595,9 +1617,30 @@ Object decodeClinicRecord(Uint8List recordBytes) {
 }
 
 /// Decode a CLINIC body (envelope already stripped).
+///
+/// proto 0x06 carries the name block right after the header; an
+/// older (0x05) packet has none - read as name '' (no name known),
+/// never misread with the wrong offsets.
 Clinic decodeClinic(Uint8List payload) {
   final (header, off0) = unpackHeader(payload);
   var off = off0;
+  var name = '';
+  if (header.version >= 0x06) {
+    if (payload.length < off + 1) {
+      throw CodecError('CLINIC too short (name_len)');
+    }
+    final nameLen = payload[off];
+    off += 1;
+    if (payload.length < off + nameLen) {
+      throw CodecError('CLINIC name block truncated');
+    }
+    try {
+      name = utf8.decode(payload.sublist(off, off + nameLen));
+    } on FormatException catch (exc) {
+      throw CodecError('CLINIC name is not utf-8: $exc');
+    }
+    off += nameLen;
+  }
   if (payload.length < off + 1) throw CodecError('CLINIC too short (count)');
   final count = payload[off];
   off += 1;
@@ -1607,7 +1650,8 @@ Clinic decodeClinic(Uint8List payload) {
     records.add(record);
     off = next;
   }
-  return Clinic(seq: header.seq, origin: header.origin, records: records);
+  return Clinic(seq: header.seq, origin: header.origin, records: records,
+      name: name);
 }
 
 // ---------------------------------------------------------------------------

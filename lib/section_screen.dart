@@ -393,7 +393,8 @@ class _SectionScreenState extends State<SectionScreen> {
                       key: ValueKey('sect-list-node-${n.prefix}'),
                       leading: const Icon(Icons.place,
                           color: Color(0xFF4A90D9), size: 20),
-                      title: Text(n.name ?? 'prefix ${n.prefix}'),
+                      title: Text(n.name ??
+                          'prefix ${n.prefix.toRadixString(16).padLeft(2, '0')}'),
                       subtitle: Text(
                         'prefix ${n.prefix.toRadixString(16).padLeft(2, '0')}'
                         ' - heard ${ageText(n.lastHeardMs)} ago',
@@ -411,7 +412,10 @@ class _SectionScreenState extends State<SectionScreen> {
                       dense: true,
                       key: ValueKey('sect-list-route-${r.routeId}'),
                       leading: const Icon(Icons.route, size: 20),
-                      title: Text('route ${r.routeId}'),
+                      // NAMED BY ITS HOPS (Brett 2026-10-02): the
+                      // route id is a wire number, never an identity.
+                      title: Text(
+                          ClinicCards.routeTitle(widget.store, r.prefixes)),
                       subtitle: Text(
                         '${r.prefixes.length} hop(s)'
                         ' - ${r.packetCount} packet(s)'

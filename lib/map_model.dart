@@ -712,9 +712,8 @@ sealed class HealthRow {
 class HealthFamily extends HealthRow {
   final String name;
   const HealthFamily(this.name);
-}
-
-/// The provenance chip: Direct (2f25) / Reported (beef).
+}  /// The provenance chip: Direct (home) / the box's NAME / the
+  /// honest "unknown box" gap - never a hex tag (Brett, 2026-10-02).
 class HealthChip extends HealthRow {
   final String label;
   const HealthChip(this.label);

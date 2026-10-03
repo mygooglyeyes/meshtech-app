@@ -43,6 +43,14 @@ const Map<String, String> golden = {
   // to the same bytes (tests/golden_vectors.json "clinic_health").
   'clinic_health':
       '1453490514017eb104050c7eb13c0090010c00ac0d6400060e7eb134127800fa00020001000300070a7eb13c0004000300090008177eb10221330102030405060708a1a2a3a4a5a6a7a80700',
+  // clinic_named: the name block (CLINIC-WIRE.md, Brett 2026-10-02) -
+  // proto 0x06 + name_len 07 + "Hilltop" right after the header. The
+  // "clinic" vector above STAYS 0x05: an old/nameless sender must
+  // keep decoding and re-encoding byte-identical. Generated with the
+  // node's tools/gen_golden.py (tests/golden_vectors.json
+  // "clinic_named").
+  'clinic_named':
+      '1453350615017eb10748696c6c746f700201147eb12103000500070080022514240410a6b09c0a040fefbe0100000400d204040028000900',
 };
 
 Uint8List bytesOf(String hex) => Uint8List.fromList([
@@ -424,6 +432,34 @@ void clinicTests() {
       expect(
           () => decodeClinicRecord(Uint8List.fromList(
               const [clinicKindCollision, 22, 1, 2, 3])),
+          throwsCodecError);
+    });
+  });
+
+  group('CLINIC NAMED golden vector (the name block, proto 0x06)', () {
+    test('decodes the sender name and re-encodes byte-identical', () {
+      final c = decodeGolden<Clinic>(golden['clinic_named']!);
+      expect(c.seq, 0x0115);
+      expect(c.origin, 0xb17e);
+      expect(c.name, 'Hilltop'); // the SENDING box's own name
+      expect(c.records.length, 2);
+      expect((c.records[0] as ClinicNodeFact).source, 0xb17e);
+      expect((c.records[1] as ClinicPeerFact).source, 0xbeef); // second-hand
+
+      expect(
+          hexOf(encodeClinic(c.records,
+              seq: c.seq, origin: c.origin, name: c.name)),
+          golden['clinic_named']);
+    });
+
+    test('no name = the old 0x05 bytes; an over-long name is refused',
+        () {
+      final c = decodeGolden<Clinic>(golden['clinic']!);
+      expect(c.name, ''); // an older sender sent no name block
+      expect(hexOf(encodeClinic(c.records, seq: c.seq, origin: c.origin)),
+          golden['clinic']);
+      expect(
+          () => encodeClinic(c.records, seq: 1, name: 'x' * (maxName + 1)),
           throwsCodecError);
     });
   });
