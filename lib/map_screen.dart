@@ -73,6 +73,18 @@ class MapScreen extends StatefulWidget {
     this.onGrid,
   });
 
+  /// Camera zoom that spans the chosen window: ~60 km -> z9,
+  /// ~40 km -> z10, ~20 km -> z11 (Log2(60/km) rule of thumb).
+  /// THE shared rule (Brett, 2026-10-02): the section page opens
+  /// at this SAME zoom as the main map's current size - never
+  /// fit-to-the-square (that opened too close and pushed the
+  /// square's edge nodes out of view).
+  static double zoomFor(int km) => switch (km) {
+        60 => 9,
+        40 => 10,
+        _ => 11,
+      };
+
   @override
   State<MapScreen> createState() => _MapScreenState();
 }
@@ -189,7 +201,7 @@ class _MapScreenState extends State<MapScreen> {
                   options: MapOptions(
                     initStyle: mapStyleUrl,
                     initCenter: Geographic(lon: home.$2, lat: home.$1),
-                    initZoom: _zoomFor(s.mapSizeKm),
+                    initZoom: MapScreen.zoomFor(s.mapSizeKm),
                     // THE MAP LOCK (Brett, 2026-09-26): the camera
                     // is PARKED - home area at the chosen size - and
                     // no finger can move it (no drag, pinch, turn or
@@ -407,7 +419,7 @@ class _MapScreenState extends State<MapScreen> {
                         onTap: () => _map?.moveCamera(
                             center: Geographic(
                                 lon: home.$2, lat: home.$1),
-                            zoom: _zoomFor(s.mapSizeKm)),
+                            zoom: MapScreen.zoomFor(s.mapSizeKm)),
                       ),
                       // THE UPDATE (Brett, 2026-09-24): the phone asks
                       // for the area data NOW - map furniture, as the
@@ -433,7 +445,7 @@ class _MapScreenState extends State<MapScreen> {
                           _map?.moveCamera(
                               center: Geographic(
                                   lon: home.$2, lat: home.$1),
-                              zoom: _zoomFor(km));
+                              zoom: MapScreen.zoomFor(km));
                         },
                       ),
                       _NavButton(
@@ -447,7 +459,7 @@ class _MapScreenState extends State<MapScreen> {
                           _map?.moveCamera(
                               center: Geographic(
                                   lon: home.$2, lat: home.$1),
-                              zoom: _zoomFor(km));
+                              zoom: MapScreen.zoomFor(km));
                         },
                       ),
                       // THE ROUTE-LINE TOGGLE (Brett 2026-09-25):
@@ -581,14 +593,6 @@ class _MapScreenState extends State<MapScreen> {
         (mPerDeg * math.cos(lat * math.pi / 180.0));
     return (lat + dLat, lon - dLon);
   }
-
-  /// Camera zoom that spans the chosen window: ~60 km -> z9,
-  /// ~40 km -> z10, ~20 km -> z11 (Log2(60/km) rule of thumb).
-  static double _zoomFor(int km) => switch (km) {
-        60 => 9,
-        40 => 10,
-        _ => 11,
-      };
 }
 
 class _NavButton extends StatelessWidget {

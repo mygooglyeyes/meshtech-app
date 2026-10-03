@@ -1,6 +1,9 @@
 // THE SECTION DETAIL PAGE (Brett, 2026-09-25): tapping a section of
 // the main map opens THIS page over it - one server 3x3 section,
-// camera parked on its center at the section's own span. What it
+// camera centered on the square at the MAIN map's current zoom
+// (Brett, 2026-10-02: the old fit-to-the-square rounded UP and
+// opened too close - nodes at the square's edges sat outside the
+// view, worst at the 60 km main view). What it
 // shows: the nodes WITH their names (tappable), the background route
 // lines with their OWN show/hide toggle, and the WARM layer - orange
 // route lines, only ever fed by summaries of this exact section (the
@@ -15,8 +18,6 @@
 // and strips (his approved graphical design), every fact chipped
 // Direct/Reported, and an honest "not measured yet" wherever the
 // mesh carries no such fact.
-
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart' hide Route;
 import 'package:maplibre/maplibre.dart';
@@ -35,9 +36,16 @@ class SectionScreen extends StatefulWidget {
 
   /// The square that was tapped (Brett, 2026-09-25): its number IS
   /// the section id the wire speaks (1 upper left .. 12 lower
-  /// right), and its geography is where this page's camera parks -
-  /// the square he tapped, up close.
+  /// right), and its geography is where this page's camera CENTERS -
+  /// the zoom itself is the main map's current zoom (initZoom).
   final SectionCell cell;
+
+  /// THE OPENING ZOOM (Brett, 2026-10-02): the main map's current
+  /// zoom, passed in by the shell - this page opens at WHATEVER he
+  /// was just looking at (60 km -> z9), never fit-to-the-square
+  /// (that fit rounded up and opened too close: edge nodes sat
+  /// outside the view). Pinch after opening is unchanged.
+  final double initZoom;
 
   /// The clinic facts - where a tap's health card reads from.
   final ClinicStore clinic;
@@ -79,6 +87,7 @@ class SectionScreen extends StatefulWidget {
     required this.store,
     required this.clinic,
     required this.cell,
+    required this.initZoom,
     this.hotRouteIds = const [],
     this.summary,
     required this.onClose,
@@ -116,12 +125,6 @@ class _SectionScreenState extends State<SectionScreen> {
   /// How close (logical pixels) a tap must come to a drawn line to
   /// count as a hit on it.
   static const _pickTolerance = 22.0;
-
-  /// The camera spans exactly the tapped square - the main map's
-  /// own zoom rule (60 km -> z9, each doubling down -> +1, rounded)
-  /// applied to the square's own N-S size.
-  static double _zoomForSpan(double spanM) =>
-      (9 + math.log(60000.0 / spanM) / math.ln2).roundToDouble();
 
   /// A node's tag tapped: it selects - the same tag again deselects,
   /// a different tag takes it over, and the route selection clears
@@ -504,7 +507,7 @@ class _SectionScreenState extends State<SectionScreen> {
       options: MapOptions(
         initStyle: mapStyleUrl,
         initCenter: Geographic(lon: c.centerLon, lat: c.centerLat),
-        initZoom: _zoomForSpan(c.spanLatM),
+        initZoom: widget.initZoom,
         // PINCH TO ZOOM (Brett, 2026-09-30: node labels overlap and
         // taps miss - "we need to be able to zoom in"): the camera
         // still ignores stray drags and tilts (the map lock's

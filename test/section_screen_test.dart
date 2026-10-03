@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:meshtech_app/clinic_store.dart';
 import 'package:meshtech_app/codec.dart';
 import 'package:meshtech_app/map_model.dart';
+import 'package:meshtech_app/map_screen.dart' show MapScreen;
 import 'package:meshtech_app/section_screen.dart';
 import 'package:meshtech_app/store.dart';
 
@@ -24,6 +25,7 @@ Widget _page(
         NodeStore? store,
         ClinicView? clinicView,
         int clinicWindowMin = 0,
+        double initZoom = 9,
         ValueChanged<int>? onNodeTap,
         ValueChanged<Route>? onRouteTap}) =>
     MaterialApp(
@@ -31,6 +33,7 @@ Widget _page(
         store: store ?? NodeStore(),
         clinic: ClinicStore(),
         cell: _cell,
+        initZoom: initZoom,
         summary: summary,
         clinicView: clinicView,
         clinicWindowMin: clinicWindowMin,
@@ -150,5 +153,18 @@ void main() {
     await tester.tap(find.byKey(const Key('section-list')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('fake-sect-map')), findsOneWidget);
+  });
+
+  testWidgets('the page opens at the MAIN map\'s current zoom - never '
+      'fit-to-the-square (Brett, 2026-10-02)', (tester) async {
+    // The shell passes MapScreen.zoomFor(settings.mapSizeKm): the
+    // 60 km main view (z9) opens this page at z9 too, so the whole
+    // square's neighborhood - edge nodes included - is in view.
+    expect(MapScreen.zoomFor(60), 9);
+    expect(MapScreen.zoomFor(40), 10);
+    expect(MapScreen.zoomFor(20), 11);
+    await tester.pumpWidget(_page(initZoom: 11));
+    final page = tester.widget<SectionScreen>(find.byType(SectionScreen));
+    expect(page.initZoom, 11); // the zoom arrives from outside
   });
 }
