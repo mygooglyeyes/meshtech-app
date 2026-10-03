@@ -398,29 +398,18 @@ class _MapScreenState extends State<MapScreen> {
                     ),
                   ],
                 ),
-                // THE NAVIGATION BUTTONS: recenter on home, zoom in,
-                // zoom out - the map stays in Brett's hands.
+                // THE NAVIGATION BUTTONS: update, zoom in, zoom out,
+                // route lines - the map stays in Brett's hands.
+                // (The +clinic and home buttons came OFF this stack,
+                // Brett 2026-10-03 - the Clinic page and its state
+                // are untouched in the code, just no longer reachable
+                // from here; tapping and long-pressing nodes, routes
+                // and squares is unchanged.)
                 Positioned(
                   right: 8,
                   top: 8,
                   child: Column(
                     children: [
-                      // THE +CLINIC BUTTON (Brett, 2026-09-30): the
-                      // clinic chips left the map - this opens the
-                      // Clinic page (chips, time window, sections).
-                      _NavButton(
-                        icon: Icons.local_hospital,
-                        tooltip: '+clinic (the clinic page)',
-                        onTap: () => widget.onClinicTap?.call(),
-                      ),
-                      _NavButton(
-                        icon: Icons.home_outlined,
-                        tooltip: 'Center on home',
-                        onTap: () => _map?.moveCamera(
-                            center: Geographic(
-                                lon: home.$2, lat: home.$1),
-                            zoom: MapScreen.zoomFor(s.mapSizeKm)),
-                      ),
                       // THE UPDATE (Brett, 2026-09-24): the phone asks
                       // for the area data NOW - map furniture, as the
                       // web app had it. Refusals land in the log

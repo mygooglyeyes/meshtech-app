@@ -19,6 +19,8 @@
 // Direct/Reported, and an honest "not measured yet" wherever the
 // mesh carries no such fact.
 
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart' hide Route;
 import 'package:maplibre/maplibre.dart';
 
@@ -147,9 +149,13 @@ class _SectionScreenState extends State<SectionScreen> {
       _selRoute = 0;
     });
     _openHealthCard(
-        ClinicCards.nodeTitle(widget.store, prefix),
-        ClinicCards.nodeHealthCard(widget.clinic, prefix,
-            nowMs: DateTime.now().millisecondsSinceEpoch));
+      ClinicCards.nodeTitle(widget.store, prefix),
+      ClinicCards.nodeHealthCard(
+        widget.clinic,
+        prefix,
+        nowMs: DateTime.now().millisecondsSinceEpoch,
+      ),
+    );
   }
 
   /// The detail card (Brett's approved graphical design): the title,
@@ -203,11 +209,13 @@ class _SectionScreenState extends State<SectionScreen> {
   int? _routeHitAt(Offset sp) {
     final map = _map;
     if (map == null) return null;
-    final edges = MapViewModel.routeEdges(widget.store,
-        highlightIds: widget.hotRouteIds.toSet(),
-        showBackground: _pastRoutes,
-        bounds: widget.cell.bounds(),
-        listedIn: widget.cell);
+    final edges = MapViewModel.routeEdges(
+      widget.store,
+      highlightIds: widget.hotRouteIds.toSet(),
+      showBackground: _pastRoutes,
+      bounds: widget.cell.bounds(),
+      listedIn: widget.cell,
+    );
     if (edges.isEmpty) return null;
     final geos = <Geographic>[];
     final shape = <(int, int)>[]; // (routeId, points in this segment)
@@ -222,7 +230,9 @@ class _SectionScreenState extends State<SectionScreen> {
     final screen = <int, List<List<MapPoint>>>{};
     var i = 0;
     for (final (routeId, len) in shape) {
-      final seg = [for (var k = 0; k < len; k++) (pts[i + k].dx, pts[i + k].dy)];
+      final seg = [
+        for (var k = 0; k < len; k++) (pts[i + k].dx, pts[i + k].dy),
+      ];
       i += len;
       (screen[routeId] ??= []).add(seg);
     }
@@ -260,37 +270,60 @@ class _SectionScreenState extends State<SectionScreen> {
       final r = hit == null ? null : widget.store.route(hit);
       if (r != null) {
         _openHealthCard(
-            ClinicCards.routeTitle(widget.store, r.prefixes),
-            ClinicCards.routeHealthCard(widget.clinic, r.prefixes,
-                nowMs: DateTime.now().millisecondsSinceEpoch));
+          ClinicCards.routeTitle(widget.store, r.prefixes),
+          ClinicCards.routeHealthCard(
+            widget.clinic,
+            r.prefixes,
+            nowMs: DateTime.now().millisecondsSinceEpoch,
+          ),
+        );
       }
     }
   }
 
-  /// THE EXACT EDGES (Brett, 2026-10-02): the tapped square's own
-  /// bounds ARE this page's map edges - the engine fits them to the
-  /// real viewport (contain: the square's longer on-screen axis
-  /// hits both edges; the other carries the least possible margin,
-  /// never a cropped node and never the whole map). A few instant
-  /// attempts ride the engine's settle (the schedule in
-  /// onMapCreated); after that this stops touching the camera.
+  /// THE EXACT PLACEMENT (Brett's approved fix, 2026-10-03): the
+  /// engine's own fit call is broken in this plugin build - its
+  /// animate path throws "Null duration" on every attempt at every
+  /// size (the probe proved it), so the page does the placement
+  /// itself in plain arithmetic: read what the engine currently
+  /// shows, divide by the square's own edges, and move the camera
+  /// by exactly that ratio - centre = the square's centre, zoom =
+  /// the one that fits BOTH axes (contain: the tighter axis hits
+  /// the edges, the other carries margin - never a cropped node).
+  /// Every attempt re-reads, so it self-corrects while the engine
+  /// settles; once the attempts run out, his fingers own it.
   void _fitToSection() {
     if (_map == null || !mounted || _fitsLeft <= 0) return;
     _fitsLeft--;
-    final (minLon, minLat, maxLon, maxLat) = widget.cell.bounds();
+    final map = _map!;
     try {
-      _map!.fitBounds(
-        bounds: LngLatBounds(
-          longitudeWest: minLon,
-          longitudeEast: maxLon,
-          latitudeSouth: minLat,
-          latitudeNorth: maxLat,
-        ),
-        nativeDuration: Duration.zero,
-      );
+      final cam = map.getCamera();
+      final v = map.getVisibleRegion();
+      final (minLon, minLat, maxLon, maxLat) = widget.cell.bounds();
+      // How much of the square each axis currently misses: view
+      // span divided by the square's own span, per axis.
+      final fLat = (v.latitudeNorth - v.latitudeSouth) / (maxLat - minLat);
+      final fLon = (v.longitudeEast - v.longitudeWest) / (maxLon - minLon);
+      // CONTAIN: the tighter axis decides; the other carries margin.
+      final f = math.min(fLat, fLon);
+      if (!f.isFinite || f <= 0) return; // an honest skip - next try
+      final zoom = cam.zoom + math.log(f) / math.ln2;
+      map
+          .moveCamera(
+            center: Geographic(
+              lon: widget.cell.centerLon,
+              lat: widget.cell.centerLat,
+            ),
+            zoom: zoom,
+          )
+          .catchError((Object _) {
+            // The engine is not ready THIS attempt - the next
+            // settle attempt carries it. Never fatal, never a
+            // fabricated view.
+          });
     } catch (_) {
-      // The engine is not ready THIS attempt - the next settle
-      // attempt carries it. Never fatal, never a fabricated view.
+      // The engine is not ready THIS attempt either - the next
+      // settle attempt carries it. Never fatal, never a lie.
     }
   }
 
@@ -305,11 +338,13 @@ class _SectionScreenState extends State<SectionScreen> {
     // RULE (same day): a line draws when it comes to or leaves a
     // node this section's list names - zooming out never paints
     // other sections' lines.
-    final edges = MapViewModel.routeEdges(widget.store,
-        highlightIds: widget.hotRouteIds.toSet(),
-        showBackground: _pastRoutes,
-        bounds: widget.cell.bounds(),
-        listedIn: widget.cell);
+    final edges = MapViewModel.routeEdges(
+      widget.store,
+      highlightIds: widget.hotRouteIds.toSet(),
+      showBackground: _pastRoutes,
+      bounds: widget.cell.bounds(),
+      listedIn: widget.cell,
+    );
     // Paint order: faint background, then the warm summary lines,
     // then the selected line on top - orange lives HERE, never on
     // the main map (Brett, 2026-09-25).
@@ -329,8 +364,8 @@ class _SectionScreenState extends State<SectionScreen> {
     final body = _showList
         ? _listBody()
         : widget.mapBuilder != null
-            ? widget.mapBuilder!(context)
-            : _buildMap(dots, faint, hot, sel, _clinicLayer(nowMs), edges);
+        ? widget.mapBuilder!(context)
+        : _buildMap(dots, faint, hot, sel, _clinicLayer(nowMs), edges);
     return Scaffold(
       // The page's own bar: back to the map, which section this is,
       // the map/list switch (Brett, 2026-09-30), and the background
@@ -361,8 +396,10 @@ class _SectionScreenState extends State<SectionScreen> {
             tooltip: _pastRoutes
                 ? 'Past route lines: shown (tap to hide)'
                 : 'Past route lines: hidden (tap to show)',
-            icon: Icon(Icons.route,
-                color: _pastRoutes ? Colors.white : Colors.white38),
+            icon: Icon(
+              Icons.route,
+              color: _pastRoutes ? Colors.white : Colors.white38,
+            ),
             onPressed: _toggleRoutes,
           ),
         ],
@@ -408,8 +445,7 @@ class _SectionScreenState extends State<SectionScreen> {
                 padding: const EdgeInsets.fromLTRB(34, 6, 12, 8),
                 children: [
                   for (final line in widget.log)
-                    Text(line,
-                        style: Theme.of(context).textTheme.bodySmall),
+                    Text(line, style: Theme.of(context).textTheme.bodySmall),
                 ],
               ),
             ),
@@ -426,13 +462,16 @@ class _SectionScreenState extends State<SectionScreen> {
   Widget _listBody() {
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final cell = widget.cell;
-    final nodes = [
-      for (final n in widget.store.nodes.values)
-        if (n.lat != null && n.lon != null && cell.contains(n.lat!, n.lon!))
-          n,
-    ]..sort((a, b) => (a.name ?? a.prefix.toString())
-        .toLowerCase()
-        .compareTo((b.name ?? b.prefix.toString()).toLowerCase()));
+    final nodes =
+        [
+          for (final n in widget.store.nodes.values)
+            if (n.lat != null && n.lon != null && cell.contains(n.lat!, n.lon!))
+              n,
+        ]..sort(
+          (a, b) => (a.name ?? a.prefix.toString()).toLowerCase().compareTo(
+            (b.name ?? b.prefix.toString()).toLowerCase(),
+          ),
+        );
     final routes = [
       for (final r in widget.store.routes)
         if (r.sectionId == cell.id) r, // this square's own routes
@@ -442,9 +481,10 @@ class _SectionScreenState extends State<SectionScreen> {
       return ageMin < 60
           ? '$ageMin min'
           : ageMin < 1440
-              ? '${ageMin ~/ 60} h'
-              : '${ageMin ~/ 1440} d';
+          ? '${ageMin ~/ 60} h'
+          : '${ageMin ~/ 1440} d';
     }
+
     return DefaultTabController(
       length: 2,
       child: Column(
@@ -452,10 +492,12 @@ class _SectionScreenState extends State<SectionScreen> {
         children: [
           Material(
             color: Theme.of(context).colorScheme.surfaceContainer,
-            child: const TabBar(tabs: [
-              Tab(text: 'Nodes'),
-              Tab(text: 'Routes'),
-            ]),
+            child: const TabBar(
+              tabs: [
+                Tab(text: 'Nodes'),
+                Tab(text: 'Routes'),
+              ],
+            ),
           ),
           Expanded(
             child: TabBarView(
@@ -467,10 +509,15 @@ class _SectionScreenState extends State<SectionScreen> {
                     return ListTile(
                       dense: true,
                       key: ValueKey('sect-list-node-${n.prefix}'),
-                      leading: const Icon(Icons.place,
-                          color: Color(0xFF4A90D9), size: 20),
-                      title: Text(n.name ??
-                          'prefix ${n.prefix.toRadixString(16).padLeft(2, '0')}'),
+                      leading: const Icon(
+                        Icons.place,
+                        color: Color(0xFF4A90D9),
+                        size: 20,
+                      ),
+                      title: Text(
+                        n.name ??
+                            'prefix ${n.prefix.toRadixString(16).padLeft(2, '0')}',
+                      ),
                       subtitle: Text(
                         'prefix ${n.prefix.toRadixString(16).padLeft(2, '0')}'
                         ' - heard ${ageText(n.lastHeardMs)} ago',
@@ -491,7 +538,8 @@ class _SectionScreenState extends State<SectionScreen> {
                       // NAMED BY ITS HOPS (Brett 2026-10-02): the
                       // route id is a wire number, never an identity.
                       title: Text(
-                          ClinicCards.routeTitle(widget.store, r.prefixes)),
+                        ClinicCards.routeTitle(widget.store, r.prefixes),
+                      ),
                       subtitle: Text(
                         '${r.prefixes.length} hop(s)'
                         ' - ${r.packetCount} packet(s)'
@@ -513,12 +561,15 @@ class _SectionScreenState extends State<SectionScreen> {
   /// Segments -> the engine's line features (same shape the main
   /// map paints with - this file only chooses WHAT gets painted).
   static List<Feature<LineString>> paint(List<List<MapPoint>> segs) => [
-        for (final seg in segs)
-          Feature(
-            geometry: LineString(
-                [for (final p in seg) ...[p.$1, p.$2]].positions(Coords.xy)),
-          ),
-      ];
+    for (final seg in segs)
+      Feature(
+        geometry: LineString(
+          [
+            for (final p in seg) ...[p.$1, p.$2],
+          ].positions(Coords.xy),
+        ),
+      ),
+  ];
 
   /// The summary's numbers, restated - no arithmetic, no invention.
   String get _statsLine {
@@ -536,8 +587,13 @@ class _SectionScreenState extends State<SectionScreen> {
   /// colored by honest state. Null on the plain section page.
   ClinicLayer? _clinicLayer(int nowMs) => widget.clinicView == null
       ? null
-      : ClinicLayerVM.build(widget.clinic, widget.store, widget.clinicView!,
-          nowMs: nowMs, windowMin: widget.clinicWindowMin);
+      : ClinicLayerVM.build(
+          widget.clinic,
+          widget.store,
+          widget.clinicView!,
+          nowMs: nowMs,
+          windowMin: widget.clinicWindowMin,
+        );
 
   static const _clinicColors = [
     (ClinicColor.fresh, Color(0xFF4A90D9)),
@@ -551,29 +607,36 @@ class _SectionScreenState extends State<SectionScreen> {
     (ClinicColor.secondHand, Color(0xFF26A69A)),
   ];
   static List<Feature<Point>> _clinicDots(ClinicLayer layer, ClinicColor c) => [
-        for (final m in layer.markers)
-          if (m.color == c)
-            Feature(geometry: Point(Geographic(lon: m.lon, lat: m.lat))),
-      ];
+    for (final m in layer.markers)
+      if (m.color == c)
+        Feature(
+          geometry: Point(Geographic(lon: m.lon, lat: m.lat)),
+        ),
+  ];
   static List<Feature<LineString>> _clinicLines(
-          ClinicLayer layer, ClinicColor c) =>
-      [
-        for (final l in layer.lines)
-          if (l.color == c)
-            for (final seg in l.segs)
-              Feature(
-                geometry: LineString(
-                    [for (final p in seg) ...[p.$1, p.$2]].positions(Coords.xy)),
-              ),
-      ];
+    ClinicLayer layer,
+    ClinicColor c,
+  ) => [
+    for (final l in layer.lines)
+      if (l.color == c)
+        for (final seg in l.segs)
+          Feature(
+            geometry: LineString(
+              [
+                for (final p in seg) ...[p.$1, p.$2],
+              ].positions(Coords.xy),
+            ),
+          ),
+  ];
 
   Widget _buildMap(
-      List<DotVM> dots,
-      List<List<MapPoint>> faint,
-      List<List<MapPoint>> hot,
-      List<List<MapPoint>> sel,
-      ClinicLayer? clinic,
-      List<RouteEdgeVM> edges) {
+    List<DotVM> dots,
+    List<List<MapPoint>> faint,
+    List<List<MapPoint>> hot,
+    List<List<MapPoint>> sel,
+    ClinicLayer? clinic,
+    List<RouteEdgeVM> edges,
+  ) {
     final c = widget.cell;
     return MapLibreMap(
       key: ValueKey('sectmap-${c.id}'),
@@ -604,7 +667,9 @@ class _SectionScreenState extends State<SectionScreen> {
           points: [
             for (final d in dots)
               if (d.color != DotColor.stale)
-                Feature(geometry: Point(Geographic(lon: d.lon, lat: d.lat))),
+                Feature(
+                  geometry: Point(Geographic(lon: d.lon, lat: d.lat)),
+                ),
           ],
           radius: 6,
           color: const Color(0xFF4A90D9),
@@ -615,7 +680,9 @@ class _SectionScreenState extends State<SectionScreen> {
           points: [
             for (final d in dots)
               if (d.color == DotColor.stale)
-                Feature(geometry: Point(Geographic(lon: d.lon, lat: d.lat))),
+                Feature(
+                  geometry: Point(Geographic(lon: d.lon, lat: d.lat)),
+                ),
           ],
           radius: 6,
           color: const Color(0xFFF5C518),
@@ -716,7 +783,9 @@ class _SectionScreenState extends State<SectionScreen> {
                     child: Text(
                       m.label,
                       style: const TextStyle(
-                          fontSize: 11, color: Colors.black87),
+                        fontSize: 11,
+                        color: Colors.black87,
+                      ),
                     ),
                   ),
             ],
