@@ -1,9 +1,9 @@
 // THE SECTION DETAIL PAGE (Brett, 2026-09-25): tapping a section of
-// the main map opens THIS page over it - one server 3x3 section,
-// camera centered on the square at the MAIN map's current zoom
-// (Brett, 2026-10-02: the old fit-to-the-square rounded UP and
-// opened too close - nodes at the square's edges sat outside the
-// view, worst at the 60 km main view). What it
+// the main map opens THIS page over it - one server 3x3 section, a
+// SQUARE map (the main page's own shape) whose edges are the
+// tapped square's OWN bounds (Brett, 2026-10-02: a bigger 60 km
+// section opens wider, snug edge to edge - never the whole map),
+// with the main page's Logs bar below it. What it
 // shows: the nodes WITH their names (tappable), the background route
 // lines with their OWN show/hide toggle, and the WARM layer - orange
 // route lines, only ever fed by summaries of this exact section (the
@@ -25,6 +25,7 @@ import 'package:maplibre/maplibre.dart';
 import 'clinic_store.dart';
 import 'codec.dart' show Route, SectSum;
 import 'detail_screen.dart';
+import 'main_page.dart' show SectionBar;
 import 'map_model.dart';
 import 'map_screen.dart' show mapStyleUrl;
 import 'store.dart';
@@ -36,16 +37,16 @@ class SectionScreen extends StatefulWidget {
 
   /// The square that was tapped (Brett, 2026-09-25): its number IS
   /// the section id the wire speaks (1 upper left .. 12 lower
-  /// right), and its geography is where this page's camera CENTERS -
-  /// the zoom itself is the main map's current zoom (initZoom).
+  /// right). Its OWN bounds are this page's map edges (Brett,
+  /// 2026-10-02): the camera fits the square snug - a bigger 60 km
+  /// section opens wider, and no part of the section ever falls
+  /// outside the view.
   final SectionCell cell;
 
-  /// THE OPENING ZOOM (Brett, 2026-10-02): the main map's current
-  /// zoom, passed in by the shell - this page opens at WHATEVER he
-  /// was just looking at (60 km -> z9), never fit-to-the-square
-  /// (that fit rounded up and opened too close: edge nodes sat
-  /// outside the view). Pinch after opening is unchanged.
-  final double initZoom;
+  /// THE LOGS (Brett, 2026-10-02: "a bottom section the same as the
+  /// main page, that shows the logs as well"): the shell's event
+  /// lines under the square map, behind the main page's own bar.
+  final List<String> log;
 
   /// The clinic facts - where a tap's health card reads from.
   final ClinicStore clinic;
@@ -87,7 +88,7 @@ class SectionScreen extends StatefulWidget {
     required this.store,
     required this.clinic,
     required this.cell,
-    required this.initZoom,
+    this.log = const [],
     this.hotRouteIds = const [],
     this.summary,
     required this.onClose,
@@ -125,6 +126,16 @@ class _SectionScreenState extends State<SectionScreen> {
   /// How close (logical pixels) a tap must come to a drawn line to
   /// count as a hit on it.
   static const _pickTolerance = 22.0;
+
+  /// THE LOGS BAR (the main page's own): closed by default - the
+  /// square map keeps the space, one tap opens the lines.
+  bool _logsOpen = false;
+
+  /// THE ENGINE SETTLE (the main page's startup-bug lesson): the
+  /// section-fit gets a few instant attempts while the engine
+  /// finds its real size, then never touches the camera again -
+  /// his pinch owns it from there.
+  int _fitsLeft = 4;
 
   /// A node's tag tapped: it selects - the same tag again deselects,
   /// a different tag takes it over, and the route selection clears
@@ -227,6 +238,9 @@ class _SectionScreenState extends State<SectionScreen> {
   /// to ride along with the tap); a hold on bare map does nothing.
   void _onMapEvent(MapEvent e) {
     if (_map == null) return;
+    // THE SETTLE FIT: once the engine has its style, the section's
+    // exact bounds land (an earlier attempt may have been early).
+    if (e is MapEventStyleLoaded) _fitToSection();
     if (e is MapEventClick) {
       final hit = _routeHitAt(e.screenPoint);
       setState(() {
@@ -250,6 +264,33 @@ class _SectionScreenState extends State<SectionScreen> {
             ClinicCards.routeHealthCard(widget.clinic, r.prefixes,
                 nowMs: DateTime.now().millisecondsSinceEpoch));
       }
+    }
+  }
+
+  /// THE EXACT EDGES (Brett, 2026-10-02): the tapped square's own
+  /// bounds ARE this page's map edges - the engine fits them to the
+  /// real viewport (contain: the square's longer on-screen axis
+  /// hits both edges; the other carries the least possible margin,
+  /// never a cropped node and never the whole map). A few instant
+  /// attempts ride the engine's settle (the schedule in
+  /// onMapCreated); after that this stops touching the camera.
+  void _fitToSection() {
+    if (_map == null || !mounted || _fitsLeft <= 0) return;
+    _fitsLeft--;
+    final (minLon, minLat, maxLon, maxLat) = widget.cell.bounds();
+    try {
+      _map!.fitBounds(
+        bounds: LngLatBounds(
+          longitudeWest: minLon,
+          longitudeEast: maxLon,
+          latitudeSouth: minLat,
+          latitudeNorth: maxLat,
+        ),
+        nativeDuration: Duration.zero,
+      );
+    } catch (_) {
+      // The engine is not ready THIS attempt - the next settle
+      // attempt carries it. Never fatal, never a fabricated view.
     }
   }
 
@@ -340,7 +381,39 @@ class _SectionScreenState extends State<SectionScreen> {
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ),
-          Expanded(child: body),
+          // THE SQUARE MAP (Brett, 2026-10-02): the main page's
+          // own shape - the tapped section's bounds fit it edge to
+          // edge (the settle fit above does the placing). Loose +
+          // capped: a short screen shrinks the square instead of
+          // overflowing, and the Logs bar keeps its room.
+          Flexible(
+            fit: FlexFit.loose,
+            child: AspectRatio(aspectRatio: 1, child: body),
+          ),
+          // THE LOGS (Brett, same day: "a bottom section the same
+          // as the main page, that shows the logs as well") - the
+          // same bar, the same lines, closed by default like the
+          // main page.
+          SectionBar(
+            label: 'Logs',
+            open: _logsOpen,
+            onToggle: () => setState(() {
+              _logsOpen = !_logsOpen;
+              // A resized map earns ONE fresh edge-fit.
+              if (_fitsLeft <= 0) _fitsLeft = 1;
+            }),
+            child: SizedBox(
+              height: 140,
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(34, 6, 12, 8),
+                children: [
+                  for (final line in widget.log)
+                    Text(line,
+                        style: Theme.of(context).textTheme.bodySmall),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -507,7 +580,7 @@ class _SectionScreenState extends State<SectionScreen> {
       options: MapOptions(
         initStyle: mapStyleUrl,
         initCenter: Geographic(lon: c.centerLon, lat: c.centerLat),
-        initZoom: widget.initZoom,
+        initZoom: MapViewModel.zoomForSpan(c.spanLatM), // first frame only
         // PINCH TO ZOOM (Brett, 2026-09-30: node labels overlap and
         // taps miss - "we need to be able to zoom in"): the camera
         // still ignores stray drags and tilts (the map lock's
@@ -515,7 +588,16 @@ class _SectionScreenState extends State<SectionScreen> {
         // midpoint, so any crowded cluster is reachable.
         gestures: const MapGestures.none(zoom: true),
       ),
-      onMapCreated: (c) => _map = c,
+      onMapCreated: (c) {
+        _map = c;
+        _fitToSection();
+        // The engine settles over its first seconds (the main
+        // page's startup-bug lesson): two more instant attempts,
+        // then the camera belongs to his fingers for good.
+        for (final delay in const [400, 1500]) {
+          Future.delayed(Duration(milliseconds: delay), _fitToSection);
+        }
+      },
       onEvent: _onMapEvent,
       layers: [
         CircleLayer(

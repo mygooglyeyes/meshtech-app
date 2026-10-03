@@ -33,7 +33,6 @@ import 'door_socket.dart';
 import 'link.dart';
 import 'main_page.dart';
 import 'map_model.dart';
-import 'map_screen.dart' show MapScreen;
 import 'section_screen.dart';
 import 'settings.dart';
 import 'store.dart';
@@ -899,11 +898,11 @@ class _MeshtechAppState extends State<MeshtechApp> {
                       store: _store,
                       clinic: _clinic,
                       cell: _openCell!,
-                      // THE OPENING ZOOM (Brett, 2026-10-02): this
-                      // page opens at the MAIN map's current zoom -
-                      // never fit-to-the-square (that opened too
-                      // close and pushed edge nodes out of view).
-                      initZoom: MapScreen.zoomFor(_settings.mapSizeKm),
+                      // THE SQUARE MAP + LOGS (Brett, 2026-10-02):
+                      // the section's own bounds fit the page's map
+                      // edge to edge (the page does the fitting),
+                      // and the main page's log lines sit under it.
+                      log: _log,
                       hotRouteIds: _sectionHot,
                       summary: _sectionSum,
                       clinicView: _sectionClinicView,

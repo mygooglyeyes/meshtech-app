@@ -172,7 +172,7 @@ class _MainPageState extends State<MainPage> {
     // another (that mismatch is the distortion bug).
     final body =
         _mapH == null ? null : (_showMap ? _mapBody(context) : _listBody());
-    final view = _Section(
+    final view = SectionBar(
       label: _showMap ? 'Map' : 'List',
       open: _viewOpen,
       onToggle: () => _toggle(_viewOpen, () => _viewOpen = !_viewOpen),
@@ -191,7 +191,7 @@ class _MainPageState extends State<MainPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _Section(
+              SectionBar(
                 key: _connKey,
                 label: 'Connection',
                 open: _connOpen,
@@ -208,7 +208,7 @@ class _MainPageState extends State<MainPage> {
                 SizedBox(height: _mapH, child: view)
               else
                 view,
-              _Section(
+              SectionBar(
                 key: _healthKey,
                 label: 'Feed health',
                 open: _healthOpen,
@@ -226,7 +226,7 @@ class _MainPageState extends State<MainPage> {
                   ),
                 ),
               ),
-              _Section(
+              SectionBar(
                 key: _logsKey,
                 label: 'Logs',
                 open: _logsOpen,
@@ -342,7 +342,7 @@ class _Pill extends StatelessWidget {
 /// One collapsible section: a tappable header bar (+/-) over its
 /// child. The bar carries the section's name in white on a lifted
 /// blue plate with a drafting line underneath.
-class _Section extends StatelessWidget {
+class SectionBar extends StatelessWidget {
   final String label;
   final bool open;
   final VoidCallback onToggle;
@@ -354,7 +354,7 @@ class _Section extends StatelessWidget {
   /// while the map's height is still being measured.
   final bool fill;
   final Widget? child;
-  const _Section({
+  const SectionBar({
     super.key,
     required this.label,
     required this.open,
